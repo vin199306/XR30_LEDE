@@ -8,7 +8,7 @@
 # Description: Build OpenWrt using GitHub Actions
 #
 
-name: Build xr30-237 Config
+name: Build xr30-237 Config for ImmortalWrt 24.10-6.6
 
 on:
   repository_dispatch:
