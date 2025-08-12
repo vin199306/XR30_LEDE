@@ -1,0 +1,197 @@
+name: Build OpenWrt XR30 (Filogic)
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Create GitHub Release with artifacts'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+  schedule:
+    - cron: '0 20 * * *'   # 每天 UTC 20:00（北京时间次日 04:00）
+
+env:
+  REPO_URL: https://github.com/coolsnowwolf/lede.git
+  REPO_BRANCH: master
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          df -h
+
+      - name: Setup dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git \
+            libncurses5-dev libssl-dev python3 python3-distutils python3-setuptools rsync swig \
+            unzip zlib1g-dev file upx-ucl p7zip-full curl wget ccache
+
+      - name: Prepare ccache
+        run: |
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> $GITHUB_ENV
+          echo "CCACHE_COMPRESS=1" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=5G" >> $GITHUB_ENV
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ runner.os }}-${{ github.workflow }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ github.workflow }}-
+
+      - name: Clone lede
+        run: |
+          git clone --depth 1 $REPO_URL -b $REPO_BRANCH lede
+
+      - name: Cache downloads (dl)
+        uses: actions/cache@v4
+        with:
+          path: lede/dl
+          key: dl-${{ runner.os }}-${{ github.workflow }}-${{ github.run_id }}
+          restore-keys: |
+            dl-${{ runner.os }}-${{ github.workflow }}-
+
+      - name: Update & install feeds
+        working-directory: lede
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Write .config
+        working-directory: lede
+        run: |
+          cat > .config << 'EOF'
+          # Target: MediaTek Filogic / CMCC XR30 NAND
+          CONFIG_TARGET_mediatek=y
+          CONFIG_TARGET_mediatek_filogic=y
+          CONFIG_TARGET_mediatek_filogic_DEVICE_cmcc_xr30-nand=y
+
+          # LuCI 用 nginx（HTTPS），避免 uhttpd
+          CONFIG_PACKAGE_luci-ssl-nginx=y
+          CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+          # 防止拉上 uhttpd
+          # CONFIG_PACKAGE_uhttpd is not set
+          # CONFIG_PACKAGE_luci-ssl is not set
+
+          # IPv6
+          CONFIG_PACKAGE_dnsmasq-full=y
+          # CONFIG_PACKAGE_dnsmasq is not set
+          CONFIG_PACKAGE_odhcp6c=y
+          CONFIG_PACKAGE_odhcpd-ipv6only=y
+          CONFIG_PACKAGE_luci-proto-ipv6=y
+
+          # 802.11s Mesh（务必禁用基础 wpad）
+          CONFIG_PACKAGE_wpad-mesh-wolfssl=y
+          # CONFIG_PACKAGE_wpad-basic-wolfssl is not set
+
+          # 文件共享：Samba4（后续可开启 SMBv1）
+          CONFIG_PACKAGE_samba4-server=y
+          CONFIG_PACKAGE_luci-app-samba4=y
+          CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y
+          # 可选：Windows 发现服务（会增体积）
+          # CONFIG_PACKAGE_wsdd2=y
+
+          # UPnP
+          CONFIG_PACKAGE_miniupnpd=y
+          CONFIG_PACKAGE_luci-app-upnp=y
+          CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y
+
+          # DDNS：阿里云（Lean 源常用）
+          CONFIG_PACKAGE_luci-app-aliddns=y
+          CONFIG_PACKAGE_ca-bundle=y
+          CONFIG_PACKAGE_curl=y
+          # 若 feeds 没有 i18n 包，则不要加：
+          # CONFIG_PACKAGE_luci-i18n-aliddns-zh-cn=y
+
+          # SSH 文件管理（SFTP，配合默认 dropbear）
+          CONFIG_PACKAGE_openssh-sftp-server=y
+
+          # Web：nginx + PHP8 + SQLite
+          CONFIG_PACKAGE_nginx-ssl=y
+          CONFIG_PACKAGE_php8=y
+          CONFIG_PACKAGE_php8-fpm=y
+          CONFIG_PACKAGE_php8-mod-pdo=y
+          CONFIG_PACKAGE_php8-mod-sqlite3=y
+          CONFIG_PACKAGE_php8-mod-pdo-sqlite=y
+          CONFIG_PACKAGE_php8-mod-session=y
+          CONFIG_PACKAGE_php8-mod-mbstring=y
+          CONFIG_PACKAGE_php8-mod-opcache=y
+          # 体积考虑，不装 sqlite3-cli（命令行客户端）
+
+          # USB3/挂载与常见文件系统
+          CONFIG_PACKAGE_block-mount=y
+          CONFIG_PACKAGE_kmod-usb2=y
+          CONFIG_PACKAGE_kmod-usb3=y
+          CONFIG_PACKAGE_kmod-usb-storage=y
+          CONFIG_PACKAGE_kmod-usb-storage-extras=y
+          CONFIG_PACKAGE_kmod-fs-ext4=y
+          CONFIG_PACKAGE_kmod-fs-exfat=y
+          CONFIG_PACKAGE_kmod-fs-vfat=y
+          CONFIG_PACKAGE_kmod-fs-ntfs3=y
+          CONFIG_PACKAGE_kmod-nls-utf8=y
+          CONFIG_PACKAGE_kmod-nls-cp437=y
+          CONFIG_PACKAGE_kmod-nls-iso8859-1=y
+          EOF
+          cat .config
+
+      - name: Make defconfig
+        working-directory: lede
+        run: |
+          make defconfig
+
+      - name: Download sources
+        working-directory: lede
+        run: |
+          make download -j8
+
+      - name: Build
+        working-directory: lede
+        env:
+          CCACHE_DIR: ${{ env.CCACHE_DIR }}
+        run: |
+          echo "Using $(nproc) cores"
+          make -j$(nproc) V=s || make -j1 V=s
+
+      - name: Collect artifacts
+        id: collect
+        working-directory: lede
+        run: |
+          set -e
+          FIRMWARE_DIR="bin/targets/mediatek/filogic"
+          echo "firmware_dir=$FIRMWARE_DIR" >> $GITHUB_OUTPUT
+          ls -alh $FIRMWARE_DIR || true
+          mkdir -p "$GITHUB_WORKSPACE/artifact"
+          cp -v $FIRMWARE_DIR/* "$GITHUB_WORKSPACE/artifact/" 2>/dev/null || true
+          cp -v $FIRMWARE_DIR/*/* "$GITHUB_WORKSPACE/artifact/" 2>/dev/null || true
+          cp -v .config "$GITHUB_WORKSPACE/artifact/XR30-build.config"
+          ls -alh "$GITHUB_WORKSPACE/artifact"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: XR30-Filogic-${{ github.run_number }}
+          path: artifact/*
+
+      - name: Create Release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.create_release == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+            tag_name: XR30-${{ github.run_number }}
+            name: XR30 Filogic Build #${{ github.run_number }}
+            files: artifact/*
+            draft: false
+            prerelease: false
+        env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
