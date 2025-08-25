@@ -9,8 +9,6 @@ on:
         default: 'false'
         type: choice
         options: ['false', 'true']
-  schedule:
-    - cron: '0 20 * * *'   # 每天 UTC 20:00（北京时间次日 04:00）
 
 env:
   REPO_URL: https://github.com/coolsnowwolf/lede.git
