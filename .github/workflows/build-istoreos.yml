@@ -122,8 +122,8 @@ jobs:
 
       - name: Adapt image for Droidspaces
         run: |
-          chmod +x patches/post_adapt.sh
-          sudo bash patches/post_adapt.sh istoreos-droid-fast.ext4
+          chmod +x ./post_adapt.sh
+          sudo bash ./post_adapt.sh istoreos-droid-fast.ext4
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
