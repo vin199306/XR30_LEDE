@@ -11,7 +11,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 缓存编译缓存 & 依赖，大幅提速二次编译
+      # 缓存编译文件，大幅加速二次构建
       - name: Cache ccache & build files
         uses: actions/cache@v4
         with:
@@ -24,13 +24,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-openwrt-istoreos-
 
+      # 修复：losetup 来自 util-linux，精简依赖、静默执行
       - name: Install minimal dependencies
         run: |
-          sudo apt update
-          sudo apt install -y build-essential ccache gawk gettext git libelf-dev \
-          libncurses5-dev libssl-dev python3 python3-distutils rsync unzip wget losetup
+          sudo apt update -qq
+          sudo apt install -qqy build-essential ccache gawk gettext git libelf-dev \
+          libncurses5-dev libssl-dev python3 python3-distutils rsync unzip wget util-linux
 
-      - name: Clone OpenWrt & add feeds
+      - name: Clone OpenWrt (shallow) & add feeds
         run: |
           git clone --depth 1 https://git.openwrt.org/openwrt/openwrt.git openwrt
           cd openwrt
@@ -44,21 +45,18 @@ jobs:
         run: |
           cd openwrt
           cat > .config <<'EOF'
-          # ========== 平台基础 ==========
           CONFIG_TARGET_armvirt=y
           CONFIG_TARGET_armvirt_64=y
           CONFIG_TARGET_armvirt_64_DEVICE_generic=y
           CONFIG_LIBC="musl"
           CONFIG_INIT_PROCD=y
 
-          # 仅输出 ext4，关闭其他镜像
           CONFIG_TARGET_ROOTFS_EXT4FS=y
           CONFIG_TARGET_ROOTFS_PARTSIZE=512
           CONFIG_TARGET_ROOTFS_SQUASHFS=n
           CONFIG_TARGET_ROOTFS_TARGZ=n
           CONFIG_TARGET_IMAGES_GZIP=n
 
-          # ========== 全局编译优化：大幅减耗时 ==========
           CONFIG_CCACHE=y
           CONFIG_BUILD_LOG=n
           CONFIG_DEBUG=n
@@ -68,7 +66,6 @@ jobs:
           CONFIG_USE_STRIP=y
           CONFIG_OPTIMIZE_FOR_SIZE=y
 
-          # 关闭全部硬件驱动（容器无用）
           CONFIG_WIRELESS=n
           CONFIG_USB=n
           CONFIG_BLK_DEV_SD=n
@@ -80,36 +77,20 @@ jobs:
           CONFIG_HID=n
           CONFIG_INPUT=n
 
-          # ========== 精简系统组件 ==========
-          # 关闭文档、手册、本地化、额外语言
           CONFIG_BUILD_DOCS=n
           CONFIG_INCLUDE_LOCALES=n
-          CONFIG_LUCI_LANG_zh_cn=n
           CONFIG_LUCI_LANG_en=y
 
-          # 基础必备包（只留运行必需）
           CONFIG_PACKAGE_luci=y
           CONFIG_PACKAGE_luci-app-firewall=y
-          CONFIG_PACKAGE_ip-full=y
           CONFIG_PACKAGE_opkg=y
-
-          # iStoreOS 核心（必须保留）
           CONFIG_PACKAGE_luci-app-istorex=y
           CONFIG_PACKAGE_luci-app-linkease=y
-
-          # 关闭所有冗余应用/工具
-          CONFIG_PACKAGE_ping=n
-          CONFIG_PACKAGE_wget=n
-          CONFIG_PACKAGE_curl=n
-          CONFIG_PACKAGE_luci-app-quickstart=n
-          CONFIG_PACKAGE_luci-app-unishare=n
-          CONFIG_PACKAGE_luci-app-diskman=n
-          CONFIG_PACKAGE_luci-app-ddnsto=n
-          CONFIG_PACKAGE_luci-theme-argon=n
           EOF
           make defconfig
 
-      - name: Build only rootfs (skip kernel/image)
+      # 只编译 rootfs，跳过内核/多余镜像
+      - name: Build rootfs only
         run: |
           cd openwrt
           make -j$(nproc) target/compile V=w
@@ -128,6 +109,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: iStoreOS-arm64-fast
+          name: iStoreOS-arm64-ext4
           path: istoreos-droid-fast.ext4
           retention-days: 30
