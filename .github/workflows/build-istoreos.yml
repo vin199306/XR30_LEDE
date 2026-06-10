@@ -1,0 +1,133 @@
+name: Build iStoreOS(Droidspaces arm64) - Fast Build
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 缓存编译缓存 & 依赖，大幅提速二次编译
+      - name: Cache ccache & build files
+        uses: actions/cache@v4
+        with:
+          path: |
+            openwrt/.ccache
+            openwrt/dl
+            openwrt/build_dir
+            openwrt/staging_dir
+          key: ${{ runner.os }}-openwrt-istoreos-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-openwrt-istoreos-
+
+      - name: Install minimal dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential ccache gawk gettext git libelf-dev \
+          libncurses5-dev libssl-dev python3 python3-distutils rsync unzip wget losetup
+
+      - name: Clone OpenWrt & add feeds
+        run: |
+          git clone --depth 1 https://git.openwrt.org/openwrt/openwrt.git openwrt
+          cd openwrt
+          echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
+          echo 'src-git nas https://github.com/linkease/nas-packages.git;master' >> feeds.conf.default
+          echo 'src-git nas_luci https://github.com/linkease/nas-packages-luci.git;main' >> feeds.conf.default
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Write minimal .config (fast build)
+        run: |
+          cd openwrt
+          cat > .config <<'EOF'
+          # ========== 平台基础 ==========
+          CONFIG_TARGET_armvirt=y
+          CONFIG_TARGET_armvirt_64=y
+          CONFIG_TARGET_armvirt_64_DEVICE_generic=y
+          CONFIG_LIBC="musl"
+          CONFIG_INIT_PROCD=y
+
+          # 仅输出 ext4，关闭其他镜像
+          CONFIG_TARGET_ROOTFS_EXT4FS=y
+          CONFIG_TARGET_ROOTFS_PARTSIZE=512
+          CONFIG_TARGET_ROOTFS_SQUASHFS=n
+          CONFIG_TARGET_ROOTFS_TARGZ=n
+          CONFIG_TARGET_IMAGES_GZIP=n
+
+          # ========== 全局编译优化：大幅减耗时 ==========
+          CONFIG_CCACHE=y
+          CONFIG_BUILD_LOG=n
+          CONFIG_DEBUG=n
+          CONFIG_DEBUG_INFO=n
+          CONFIG_KERNEL_DEBUG=n
+          CONFIG_SIGNATURE_CHECK=n
+          CONFIG_USE_STRIP=y
+          CONFIG_OPTIMIZE_FOR_SIZE=y
+
+          # 关闭全部硬件驱动（容器无用）
+          CONFIG_WIRELESS=n
+          CONFIG_USB=n
+          CONFIG_BLK_DEV_SD=n
+          CONFIG_ATA=n
+          CONFIG_PCI=n
+          CONFIG_NVME_CORE=n
+          CONFIG_VIDEO=n
+          CONFIG_SOUND=n
+          CONFIG_HID=n
+          CONFIG_INPUT=n
+
+          # ========== 精简系统组件 ==========
+          # 关闭文档、手册、本地化、额外语言
+          CONFIG_BUILD_DOCS=n
+          CONFIG_INCLUDE_LOCALES=n
+          CONFIG_LUCI_LANG_zh_cn=n
+          CONFIG_LUCI_LANG_en=y
+
+          # 基础必备包（只留运行必需）
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-app-firewall=y
+          CONFIG_PACKAGE_ip-full=y
+          CONFIG_PACKAGE_opkg=y
+
+          # iStoreOS 核心（必须保留）
+          CONFIG_PACKAGE_luci-app-istorex=y
+          CONFIG_PACKAGE_luci-app-linkease=y
+
+          # 关闭所有冗余应用/工具
+          CONFIG_PACKAGE_ping=n
+          CONFIG_PACKAGE_wget=n
+          CONFIG_PACKAGE_curl=n
+          CONFIG_PACKAGE_luci-app-quickstart=n
+          CONFIG_PACKAGE_luci-app-unishare=n
+          CONFIG_PACKAGE_luci-app-diskman=n
+          CONFIG_PACKAGE_luci-app-ddnsto=n
+          CONFIG_PACKAGE_luci-theme-argon=n
+          EOF
+          make defconfig
+
+      - name: Build only rootfs (skip kernel/image)
+        run: |
+          cd openwrt
+          make -j$(nproc) target/compile V=w
+
+      - name: Extract ext4 image
+        run: |
+          cd openwrt/bin/targets/armvirt/64
+          gzip -d *.root.ext4.gz
+          mv *.root.ext4 ../../../../istoreos-droid-fast.ext4
+
+      - name: Adapt image for Droidspaces
+        run: |
+          chmod +x patches/post_adapt.sh
+          sudo bash patches/post_adapt.sh istoreos-droid-fast.ext4
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iStoreOS-arm64-fast
+          path: istoreos-droid-fast.ext4
+          retention-days: 30
