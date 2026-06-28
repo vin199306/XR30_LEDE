@@ -223,21 +223,20 @@ jobs:
           OUTPUT_NAME="ffmpeg-${FFMPEG_VERSION}-openwrt-aarch64_cortex-a53-${OPENWRT_RELEASE}"
           mkdir -p "${OUTPUT_NAME}"
           cp "${GITHUB_WORKSPACE}/ffmpeg-install/bin/ffmpeg" "${OUTPUT_NAME}/ffmpeg"
-          cat > "${OUTPUT_NAME}/README.txt" <<EOF
-FFmpeg ${FFMPEG_VERSION} for OpenWrt aarch64_cortex-a53
-=========================================================
-Target: ${OPENWRT_TARGET}
-OpenWrt release: ${OPENWRT_RELEASE}
-Cross prefix: ${CROSS_PREFIX}
-HTTPS support: ${ENABLE_HTTPS}
-
-Install:
-  scp ${OUTPUT_NAME}/ffmpeg root@openwrt:/usr/bin/ffmpeg
-  chmod +x /usr/bin/ffmpeg
-
-Verify:
-  ffmpeg -version
-EOF
+          printf '%s\n' \
+            "FFmpeg ${FFMPEG_VERSION} for OpenWrt aarch64_cortex-a53" \
+            "=========================================================" \
+            "Target: ${OPENWRT_TARGET}" \
+            "OpenWrt release: ${OPENWRT_RELEASE}" \
+            "Cross prefix: ${CROSS_PREFIX}" \
+            "HTTPS support: ${ENABLE_HTTPS}" \
+            "" \
+            "Install:" \
+            "  scp ${OUTPUT_NAME}/ffmpeg root@openwrt:/usr/bin/ffmpeg" \
+            "  chmod +x /usr/bin/ffmpeg" \
+            "" \
+            "Verify:" \
+            "  ffmpeg -version" > "${OUTPUT_NAME}/README.txt"
           tar czf "${OUTPUT_NAME}.tar.gz" "${OUTPUT_NAME}"
 
       - name: Upload artifact
