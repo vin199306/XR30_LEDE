@@ -242,11 +242,14 @@ jobs:
           # FFmpeg's configure often fails to detect these math functions when cross-compiling
           # against musl. Force HAVE_* to 1 to avoid "static declaration follows non-static
           # declaration" errors in libavutil/libm.h.
+          CONFIG_H="config.h"
+          [ -f "ffbuild/config.h" ] && CONFIG_H="ffbuild/config.h"
+          echo "Patching ${CONFIG_H}"
           for func in CBRT CBRTF COPYSIGN ERF HYPOT; do
-            sed -i "s/#define HAVE_${func} 0/#define HAVE_${func} 1/g" ffbuild/config.h
+            sed -i "s/#define HAVE_${func} 0/#define HAVE_${func} 1/g" "${CONFIG_H}"
           done
           echo "Patched HAVE_* macros:"
-          grep -E 'HAVE_(CBRT|CBRTF|COPYSIGN|ERF|HYPOT)' ffbuild/config.h || true
+          grep -E 'HAVE_(CBRT|CBRTF|COPYSIGN|ERF|HYPOT)' "${CONFIG_H}" || true
 
       - name: Compile FFmpeg
         run: |
