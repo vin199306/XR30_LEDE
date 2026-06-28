@@ -1,7 +1,5 @@
 name: Build iStoreOS(Droidspaces arm64) - Fast Build
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
