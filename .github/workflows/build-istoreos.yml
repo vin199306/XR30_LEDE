@@ -35,6 +35,8 @@ jobs:
       OPENWRT_TARGET: ${{ github.event.inputs.openwrt_target }}
       ENABLE_HTTPS: ${{ github.event.inputs.enable_https }}
       OPENWRT_SDK_URL: ${{ github.event.inputs.openwrt_sdk_url }}
+      X264_PREFIX: ${{ github.workspace }}/x264-install
+      X265_PREFIX: ${{ github.workspace }}/x265-install
 
     steps:
       - name: Checkout repository
@@ -185,9 +187,57 @@ jobs:
           echo "OPENSSL_CFLAGS=-I${GITHUB_WORKSPACE}/openssl-install/include" >> $GITHUB_ENV
           echo "OPENSSL_LIBS=-L${GITHUB_WORKSPACE}/openssl-install/lib -lssl -lcrypto" >> $GITHUB_ENV
 
+      - name: Build static x264
+        run: |
+          X264_VERSION="stable"
+          wget -q --show-progress "https://code.videolan.org/videolan/x264/-/archive/${X264_VERSION}/x264-${X264_VERSION}.tar.bz2"
+          tar -xjf "x264-${X264_VERSION}.tar.bz2"
+          mv "x264-${X264_VERSION}" x264-src
+
+          export PATH="${CROSS_BIN_DIR}:$PATH"
+          cd x264-src
+          ./configure \
+            --host=aarch64-linux \
+            --cross-prefix="${CROSS_PREFIX}" \
+            --prefix="${X264_PREFIX}" \
+            --enable-static \
+            --disable-shared \
+            --disable-asm \
+            --disable-cli \
+            --disable-opencl
+          make -j$(nproc)
+          make install
+
+      - name: Build static x265
+        run: |
+          X265_VERSION="3.6"
+          wget -q --show-progress "https://bitbucket.org/multicoreware/x265_git/downloads/x265_${X265_VERSION}.tar.gz"
+          tar -xzf "x265_${X265_VERSION}.tar.gz"
+          mv "x265_${X265_VERSION}" x265-src
+
+          export PATH="${CROSS_BIN_DIR}:$PATH"
+          cd x265-src
+          cmake -S source -B build \
+            -DCMAKE_INSTALL_PREFIX="${X265_PREFIX}" \
+            -DCMAKE_C_COMPILER="${CC}" \
+            -DCMAKE_CXX_COMPILER="${CXX}" \
+            -DCMAKE_AR="${AR}" \
+            -DCMAKE_RANLIB="${RANLIB}" \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DENABLE_SHARED=OFF \
+            -DENABLE_CLI=OFF \
+            -DENABLE_ASSEMBLY=OFF
+          cmake --build build -j$(nproc)
+          cmake --install build
+
       - name: Configure FFmpeg
         run: |
           cd ffmpeg-src
+
+          EXTRA_CFLAGS="-I${TARGET_DIR}/usr/include -I${X264_PREFIX}/include -I${X265_PREFIX}/include"
+          EXTRA_LDFLAGS="-L${TARGET_DIR}/usr/lib -static -L${X264_PREFIX}/lib -L${X265_PREFIX}/lib -lstdc++ -lm -lpthread"
+          export PKG_CONFIG_PATH="${X264_PREFIX}/lib/pkgconfig:${X265_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH}"
 
           CONFIG_FLAGS=(
             --target-os=linux
@@ -196,8 +246,9 @@ jobs:
             --cc="${CC}"
             --cross-prefix="${CROSS_PREFIX}"
             --sysroot="${TARGET_DIR}"
-            --extra-cflags="-I${TARGET_DIR}/usr/include"
-            --extra-ldflags="-L${TARGET_DIR}/usr/lib -static"
+            --pkg-config-flags="--static"
+            --extra-cflags="${EXTRA_CFLAGS}"
+            --extra-ldflags="${EXTRA_LDFLAGS}"
             --enable-cross-compile
             --prefix="${GITHUB_WORKSPACE}/ffmpeg-install"
             --disable-ffplay
@@ -212,19 +263,23 @@ jobs:
             --enable-version3
             --enable-nonfree
             --enable-network
-            --enable-protocol=http,file,tcp,udp
-            --enable-demuxer=hls,mpegts,mpegvideo,flv,mov,mp4,m4v,matroska
+            --enable-protocol=http,file,tcp,udp,concat
+            --enable-demuxer=hls,mpegts,mpegvideo,flv,mov,mp4,m4v,matroska,concat
             --enable-muxer=mpegts,mp4,mov,matroska
+            --enable-encoder=aac,libx264,libx265
             --enable-decoder=h264,hevc,aac,mp3,mp2
             --enable-parser=h264,hevc,aac,mpegaudio
             --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc
+            --enable-libx264
+            --enable-libx265
+            --enable-filter=scale
           )
 
           if [ "${ENABLE_HTTPS}" = "true" ]; then
             CONFIG_FLAGS+=(
               --enable-openssl
-              --extra-cflags="-I${TARGET_DIR}/usr/include ${OPENSSL_CFLAGS}"
-              --extra-ldflags="-L${TARGET_DIR}/usr/lib -static ${OPENSSL_LIBS}"
+              --extra-cflags="${EXTRA_CFLAGS} ${OPENSSL_CFLAGS}"
+              --extra-ldflags="${EXTRA_LDFLAGS} ${OPENSSL_LIBS}"
               --enable-protocol=https,tls
             )
           else
@@ -285,6 +340,58 @@ jobs:
           "${STRIP}" "${GITHUB_WORKSPACE}/ffmpeg-install/bin/ffmpeg"
           ls -lh "${GITHUB_WORKSPACE}/ffmpeg-install/bin/ffmpeg"
 
+      - name: Verify TS concat and compression
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static ffmpeg
+          FFMPEG_BIN="${GITHUB_WORKSPACE}/ffmpeg-install/bin/ffmpeg"
+          WORK_DIR="${RUNNER_TEMP}/ffmpeg-verify"
+          rm -rf "${WORK_DIR}"
+          mkdir -p "${WORK_DIR}"
+          cd "${WORK_DIR}"
+
+          # Sanity-check that the cross-compiled binary exposes the required encoders and formats
+          qemu-aarch64-static "${FFMPEG_BIN}" -hide_banner -encoders | grep -q libx264 || { echo "ERROR: libx264 encoder not registered"; exit 1; }
+          qemu-aarch64-static "${FFMPEG_BIN}" -hide_banner -encoders | grep -q libx265 || { echo "ERROR: libx265 encoder not registered"; exit 1; }
+          qemu-aarch64-static "${FFMPEG_BIN}" -hide_banner -demuxers | grep -q concat || { echo "ERROR: concat demuxer not registered"; exit 1; }
+          qemu-aarch64-static "${FFMPEG_BIN}" -hide_banner -protocols | grep -q concat || { echo "ERROR: concat protocol not registered"; exit 1; }
+
+          # Create two tiny TS segments using the host's native ffmpeg
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=duration=1:size=320x240:rate=1 -f lavfi -i sine=frequency=1000:duration=1 -c:v libx264 -preset ultrafast -b:v 200k -c:a aac -b:a 32k -f mpegts seg1.ts -y
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=duration=1:size=320x240:rate=1 -f lavfi -i sine=frequency=1000:duration=1 -c:v libx264 -preset ultrafast -b:v 200k -c:a aac -b:a 32k -f mpegts seg2.ts -y
+
+          ORIG_SIZE=$(du -sk seg1.ts seg2.ts | awk '{s+=$1} END {print s}')
+
+          # Concatenate TS segments with the cross-compiled binary
+          printf "file '%s'\nfile '%s'\n" "${WORK_DIR}/seg1.ts" "${WORK_DIR}/seg2.ts" > concat.txt
+          qemu-aarch64-static "${FFMPEG_BIN}" -hide_banner -loglevel error -f concat -safe 0 -i concat.txt -c copy merged.ts -y
+
+          # Re-encode merged TS to H.264 with lower bitrate to reduce size
+          qemu-aarch64-static "${FFMPEG_BIN}" -hide_banner -loglevel error -i merged.ts -c:v libx264 -preset ultrafast -b:v 80k -s 320x240 -c:a aac -b:a 16k -movflags +faststart compressed.mp4 -y
+
+          MERGED_SIZE=$(du -sk merged.ts | cut -f1)
+          COMPRESSED_SIZE=$(du -sk compressed.mp4 | cut -f1)
+
+          echo "Original segments size: ${ORIG_SIZE} KB"
+          echo "Merged TS size: ${MERGED_SIZE} KB"
+          echo "Compressed MP4 size: ${COMPRESSED_SIZE} KB"
+
+          if [ ! -s merged.ts ]; then
+            echo "ERROR: TS concatenation produced an empty file"
+            exit 1
+          fi
+
+          if [ ! -s compressed.mp4 ]; then
+            echo "ERROR: Compression produced an empty file"
+            exit 1
+          fi
+
+          if [ "${COMPRESSED_SIZE}" -ge "${MERGED_SIZE}" ]; then
+            echo "WARNING: compressed file is not smaller than merged TS (bitrate/resolution may already be low)"
+          else
+            echo "OK: compressed file is smaller than merged TS"
+          fi
+
       - name: Create deployment tarball
         run: |
           OUTPUT_NAME="ffmpeg-${FFMPEG_VERSION}-openwrt-aarch64_cortex-a53-${OPENWRT_RELEASE}"
@@ -297,13 +404,28 @@ jobs:
             "OpenWrt release: ${OPENWRT_RELEASE}" \
             "Cross prefix: ${CROSS_PREFIX}" \
             "HTTPS support: ${ENABLE_HTTPS}" \
+            "H.264/H.265 encoders: libx264, libx265" \
+            "TS concat support: concat protocol/demuxer" \
             "" \
             "Install:" \
             "  scp ${OUTPUT_NAME}/ffmpeg root@openwrt:/usr/bin/ffmpeg" \
             "  chmod +x /usr/bin/ffmpeg" \
             "" \
             "Verify:" \
-            "  ffmpeg -version" > "${OUTPUT_NAME}/README.txt"
+            "  ffmpeg -version" \
+            "" \
+            "Concatenate TS files without re-encoding:" \
+            "  ffmpeg -i 'concat:seg1.ts|seg2.ts|seg3.ts' -c copy output.ts" \
+            "" \
+            "Or use the concat demuxer with a list file:" \
+            "  printf \"file '%s'\\n\" *.ts > list.txt" \
+            "  ffmpeg -f concat -safe 0 -i list.txt -c copy output.ts" \
+            "" \
+            "Re-encode to H.264 with lower bitrate to reduce file size:" \
+            "  ffmpeg -i input.ts -c:v libx264 -b:v 1000k -s 1280x720 -c:a aac -b:a 128k output.mp4" \
+            "" \
+            "Re-encode to H.265 for smaller size (slower):" \
+            "  ffmpeg -i input.ts -c:v libx265 -crf 28 -preset medium -c:a aac -b:a 128k output.mp4" > "${OUTPUT_NAME}/README.txt"
           tar czf "${OUTPUT_NAME}.tar.gz" "${OUTPUT_NAME}"
 
       - name: Upload artifact
