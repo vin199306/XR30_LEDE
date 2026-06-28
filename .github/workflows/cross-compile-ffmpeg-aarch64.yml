@@ -245,11 +245,26 @@ jobs:
           CONFIG_H="config.h"
           [ -f "ffbuild/config.h" ] && CONFIG_H="ffbuild/config.h"
           echo "Patching ${CONFIG_H}"
-          for func in CBRT CBRTF COPYSIGN ERF HYPOT; do
+
+          # Math functions provided by musl that FFmpeg may fail to detect
+          for func in \
+            ATAN2F ATANF CBRT CBRTF COPYSIGN COSF ERF ERFC EXP2 EXP2F EXPF \
+            FMAXF FMINF HYPOT ISFINITE ISINF ISNAN LGAMMA LLROUND LLROUNDF \
+            LOG2 LOG2F LOGB LRINT LRINTF LROUND LROUNDF NANF NEARBYINT POWF \
+            RINT RINTF ROUND ROUNDF SINF SQRTF TANF TRUNC TRUNCF; do
             sed -i "s/#define HAVE_${func} 0/#define HAVE_${func} 1/g" "${CONFIG_H}"
           done
-          echo "Patched HAVE_* macros:"
-          grep -E 'HAVE_(CBRT|CBRTF|COPYSIGN|ERF|HYPOT)' "${CONFIG_H}" || true
+
+          # Standard libc functions available on Linux/musl
+          for func in GETENV SETENV UNSETENV LOCALTIME_R GMTIME_R STRPTIME STRTOK_R; do
+            sed -i "s/#define HAVE_${func} 0/#define HAVE_${func} 1/g" "${CONFIG_H}"
+          done
+
+          # Remove the dangerous getenv macro that breaks system headers
+          sed -i '/^#define getenv(x) NULL$/d' "${CONFIG_H}"
+
+          echo "Patched HAVE_* macros (sample):"
+          grep -E 'HAVE_(CBRT|RINT|GETENV|LOCALTIME_R)' "${CONFIG_H}" || true
 
       - name: Compile FFmpeg
         run: |
