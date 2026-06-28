@@ -10,7 +10,7 @@ on:
       openwrt_release:
         description: 'OpenWrt release version'
         required: true
-        default: '23.05.3'
+        default: '24.10.2'
       openwrt_target:
         description: 'OpenWrt target (e.g. mediatek/filogic)'
         required: true
@@ -18,7 +18,7 @@ on:
       enable_https:
         description: 'Enable HTTPS support (requires static OpenSSL build)'
         required: true
-        default: 'true'
+        default: 'false'
       openwrt_sdk_url:
         description: 'Optional full SDK URL (auto-detected if empty)'
         required: false
@@ -89,6 +89,9 @@ jobs:
             *.tar.zst) tar --zstd -xf "${SDK_FILE}" || { zstd -d "${SDK_FILE}" -o openwrt-sdk.tar && tar -xf openwrt-sdk.tar; } ;;
             *) echo "Unsupported archive format: ${SDK_FILE}"; exit 1 ;;
           esac
+
+          # Remove the archive so it does not match the mv pattern below
+          rm -f "${SDK_FILE}" openwrt-sdk.tar
           mv openwrt-sdk-* openwrt-sdk
 
           # Locate toolchain directory (the part before "_gcc" contains arch info)
