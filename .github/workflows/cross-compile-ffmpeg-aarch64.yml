@@ -1,0 +1,256 @@
+name: Cross-compile FFmpeg for OpenWrt aarch64_cortex-a53
+
+on:
+  workflow_dispatch:
+    inputs:
+      ffmpeg_version:
+        description: 'FFmpeg version to compile'
+        required: true
+        default: '7.0.2'
+      openwrt_release:
+        description: 'OpenWrt release version'
+        required: true
+        default: '23.05.3'
+      openwrt_target:
+        description: 'OpenWrt target (e.g. mediatek/filogic)'
+        required: true
+        default: 'mediatek/filogic'
+      enable_https:
+        description: 'Enable HTTPS support (requires static OpenSSL build)'
+        required: true
+        default: 'true'
+
+jobs:
+  build-ffmpeg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      FFMPEG_VERSION: ${{ github.event.inputs.ffmpeg_version }}
+      OPENWRT_RELEASE: ${{ github.event.inputs.openwrt_release }}
+      OPENWRT_TARGET: ${{ github.event.inputs.openwrt_target }}
+      ENABLE_HTTPS: ${{ github.event.inputs.enable_https }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install host build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            yasm \
+            nasm \
+            pkg-config \
+            libtool \
+            gperf \
+            bison \
+            flex \
+            texinfo \
+            wget \
+            xz-utils \
+            cmake \
+            perl \
+            python3
+
+      - name: Download and extract OpenWrt SDK
+        run: |
+          TARGET_SLUG="${OPENWRT_TARGET////-}"
+          SDK_URL="https://downloads.openwrt.org/releases/${OPENWRT_RELEASE}/targets/${OPENWRT_TARGET}/openwrt-sdk-${OPENWRT_RELEASE}-${TARGET_SLUG}_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+
+          echo "Downloading OpenWrt SDK from: ${SDK_URL}"
+          wget -q --show-progress -O openwrt-sdk.tar.xz "${SDK_URL}" || {
+            echo "Failed to download SDK. Please verify the target/release combination."
+            exit 1
+          }
+
+          tar -xJf openwrt-sdk.tar.xz
+          mv openwrt-sdk-* openwrt-sdk
+
+          # Locate toolchain directory (the part before "_gcc" contains arch info)
+          TOOLCHAIN_DIR=$(find openwrt-sdk/staging_dir -maxdepth 1 -type d -name 'toolchain-aarch64*' | head -n1)
+          TARGET_DIR=$(find openwrt-sdk/staging_dir -maxdepth 1 -type d -name 'target-aarch64*' | head -n1)
+
+          if [ -z "${TOOLCHAIN_DIR}" ]; then
+            echo "Unable to locate OpenWrt toolchain directory"
+            ls -la openwrt-sdk/staging_dir
+            exit 1
+          fi
+
+          CROSS_BIN=$(find "${TOOLCHAIN_DIR}/bin" -maxdepth 1 -name 'aarch64-openwrt-linux-*-gcc' | head -n1)
+          if [ -z "${CROSS_BIN}" ]; then
+            echo "Unable to locate cross compiler"
+            ls -la "${TOOLCHAIN_DIR}/bin"
+            exit 1
+          fi
+
+          CROSS_PREFIX=$(basename "${CROSS_BIN}" gcc)
+
+          echo "TOOLCHAIN_DIR=${TOOLCHAIN_DIR}" >> $GITHUB_ENV
+          echo "TARGET_DIR=${TARGET_DIR}" >> $GITHUB_ENV
+          echo "CROSS_PREFIX=${CROSS_PREFIX}" >> $GITHUB_ENV
+          echo "CROSS_BIN_DIR=${TOOLCHAIN_DIR}/bin" >> $GITHUB_ENV
+
+      - name: Setup cross-compilation environment
+        run: |
+          export PATH="${CROSS_BIN_DIR}:$PATH"
+          export STAGING_DIR="${TARGET_DIR}"
+          export CC="${CROSS_PREFIX}gcc"
+          export CXX="${CROSS_PREFIX}g++"
+          export AR="${CROSS_PREFIX}ar"
+          export AS="${CROSS_PREFIX}as"
+          export LD="${CROSS_PREFIX}ld"
+          export NM="${CROSS_PREFIX}nm"
+          export RANLIB="${CROSS_PREFIX}ranlib"
+          export STRIP="${CROSS_PREFIX}strip"
+
+          # Verify toolchain
+          echo "Cross compiler version:"
+          "${CC}" --version
+
+          # Export for subsequent steps
+          echo "PATH=${PATH}" >> $GITHUB_ENV
+          echo "STAGING_DIR=${STAGING_DIR}" >> $GITHUB_ENV
+          echo "CC=${CC}" >> $GITHUB_ENV
+          echo "CXX=${CXX}" >> $GITHUB_ENV
+          echo "AR=${AR}" >> $GITHUB_ENV
+          echo "AS=${AS}" >> $GITHUB_ENV
+          echo "LD=${LD}" >> $GITHUB_ENV
+          echo "NM=${NM}" >> $GITHUB_ENV
+          echo "RANLIB=${RANLIB}" >> $GITHUB_ENV
+          echo "STRIP=${STRIP}" >> $GITHUB_ENV
+
+      - name: Download FFmpeg source
+        run: |
+          FFMPEG_TARBALL="ffmpeg-${FFMPEG_VERSION}.tar.xz"
+          wget -q --show-progress "https://ffmpeg.org/releases/${FFMPEG_TARBALL}"
+          tar -xJf "${FFMPEG_TARBALL}"
+          mv "ffmpeg-${FFMPEG_VERSION}" ffmpeg-src
+
+      - name: Build static OpenSSL for HTTPS support (optional)
+        if: env.ENABLE_HTTPS == 'true'
+        run: |
+          OPENSSL_VERSION="3.2.1"
+          wget -q --show-progress "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
+          tar -xzf "openssl-${OPENSSL_VERSION}.tar.gz"
+          mv "openssl-${OPENSSL_VERSION}" openssl-src
+
+          export PATH="${CROSS_BIN_DIR}:$PATH"
+          cd openssl-src
+
+          ./Configure \
+            linux-aarch64 \
+            --cross-compile-prefix="${CROSS_PREFIX}" \
+            --prefix="${GITHUB_WORKSPACE}/openssl-install" \
+            --openssldir="${GITHUB_WORKSPACE}/openssl-install" \
+            no-shared \
+            no-tests \
+            no-unit-test \
+            -static
+
+          make -j$(nproc)
+          make install_sw
+
+          echo "OPENSSL_PREFIX=${GITHUB_WORKSPACE}/openssl-install" >> $GITHUB_ENV
+          echo "OPENSSL_CFLAGS=-I${GITHUB_WORKSPACE}/openssl-install/include" >> $GITHUB_ENV
+          echo "OPENSSL_LIBS=-L${GITHUB_WORKSPACE}/openssl-install/lib -lssl -lcrypto" >> $GITHUB_ENV
+
+      - name: Configure FFmpeg
+        run: |
+          cd ffmpeg-src
+
+          CONFIG_FLAGS=(
+            --target-os=linux
+            --arch=aarch64
+            --cpu=cortex-a53
+            --cross-prefix="${CROSS_PREFIX}"
+            --sysroot="${TARGET_DIR}"
+            --enable-cross-compile
+            --prefix="${GITHUB_WORKSPACE}/ffmpeg-install"
+            --disable-ffplay
+            --disable-ffprobe
+            --disable-doc
+            --disable-debug
+            --enable-small
+            --disable-shared
+            --enable-static
+            --disable-asm
+            --enable-gpl
+            --enable-version3
+            --enable-nonfree
+            --enable-network
+            --enable-protocol=http,file,tcp,udp
+            --enable-demuxer=hls,mpegts,mpegvideo,flv,mov,mp4,m4v,matroska
+            --enable-muxer=mpegts,mp4,mov,matroska
+            --enable-decoder=h264,hevc,aac,mp3,mp2
+            --enable-parser=h264,hevc,aac,mpegaudio
+            --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc
+          )
+
+          if [ "${ENABLE_HTTPS}" = "true" ]; then
+            CONFIG_FLAGS+=(
+              --enable-openssl
+              --extra-cflags="${OPENSSL_CFLAGS}"
+              --extra-ldflags="${OPENSSL_LIBS} -static"
+              --enable-protocol=https,tls
+            )
+          else
+            CONFIG_FLAGS+=(--disable-openssl)
+          fi
+
+          echo "FFmpeg configure flags:"
+          printf '%s\n' "${CONFIG_FLAGS[@]}"
+
+          ./configure "${CONFIG_FLAGS[@]}"
+
+      - name: Compile FFmpeg
+        run: |
+          cd ffmpeg-src
+          export PATH="${CROSS_BIN_DIR}:$PATH"
+          make -j$(nproc)
+          make install
+
+      - name: Strip and inspect binary
+        run: |
+          file "${GITHUB_WORKSPACE}/ffmpeg-install/bin/ffmpeg"
+          ls -lh "${GITHUB_WORKSPACE}/ffmpeg-install/bin/ffmpeg"
+          "${STRIP}" "${GITHUB_WORKSPACE}/ffmpeg-install/bin/ffmpeg"
+          ls -lh "${GITHUB_WORKSPACE}/ffmpeg-install/bin/ffmpeg"
+
+      - name: Create deployment tarball
+        run: |
+          OUTPUT_NAME="ffmpeg-${FFMPEG_VERSION}-openwrt-aarch64_cortex-a53-${OPENWRT_RELEASE}"
+          mkdir -p "${OUTPUT_NAME}"
+          cp "${GITHUB_WORKSPACE}/ffmpeg-install/bin/ffmpeg" "${OUTPUT_NAME}/ffmpeg"
+          cat > "${OUTPUT_NAME}/README.txt" <<EOF
+FFmpeg ${FFMPEG_VERSION} for OpenWrt aarch64_cortex-a53
+=========================================================
+Target: ${OPENWRT_TARGET}
+OpenWrt release: ${OPENWRT_RELEASE}
+Cross prefix: ${CROSS_PREFIX}
+HTTPS support: ${ENABLE_HTTPS}
+
+Install:
+  scp ${OUTPUT_NAME}/ffmpeg root@openwrt:/usr/bin/ffmpeg
+  chmod +x /usr/bin/ffmpeg
+
+Verify:
+  ffmpeg -version
+EOF
+          tar czf "${OUTPUT_NAME}.tar.gz" "${OUTPUT_NAME}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-openwrt-aarch64_cortex-a53
+          path: ffmpeg-*.tar.gz
+          if-no-files-found: error
+
+      - name: Upload to release (if tagged)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ffmpeg-*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
