@@ -19,6 +19,10 @@ on:
         description: 'Enable HTTPS support (requires static OpenSSL build)'
         required: true
         default: 'true'
+      openwrt_sdk_url:
+        description: 'Optional full SDK URL (auto-detected if empty)'
+        required: false
+        default: ''
 
 jobs:
   build-ffmpeg:
@@ -30,6 +34,7 @@ jobs:
       OPENWRT_RELEASE: ${{ github.event.inputs.openwrt_release }}
       OPENWRT_TARGET: ${{ github.event.inputs.openwrt_target }}
       ENABLE_HTTPS: ${{ github.event.inputs.enable_https }}
+      OPENWRT_SDK_URL: ${{ github.event.inputs.openwrt_sdk_url }}
 
     steps:
       - name: Checkout repository
@@ -50,22 +55,40 @@ jobs:
             texinfo \
             wget \
             xz-utils \
+            zstd \
             cmake \
             perl \
             python3
 
       - name: Download and extract OpenWrt SDK
         run: |
-          TARGET_SLUG="${OPENWRT_TARGET////-}"
-          SDK_URL="https://downloads.openwrt.org/releases/${OPENWRT_RELEASE}/targets/${OPENWRT_TARGET}/openwrt-sdk-${OPENWRT_RELEASE}-${TARGET_SLUG}_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+          if [ -n "${OPENWRT_SDK_URL}" ]; then
+            SDK_URL="${OPENWRT_SDK_URL}"
+            SDK_FILE="openwrt-sdk.download"
+          else
+            TARGET_SLUG="${OPENWRT_TARGET////-}"
+            BASE_URL="https://downloads.openwrt.org/releases/${OPENWRT_RELEASE}/targets/${OPENWRT_TARGET}/"
+            echo "Auto-detecting SDK from ${BASE_URL}"
+            SDK_NAME=$(wget -qO- "${BASE_URL}" | grep -oE 'openwrt-sdk-[^"]+\.tar\.(xz|zst)' | head -n1)
+            if [ -z "${SDK_NAME}" ]; then
+              echo "Unable to detect SDK filename. Please provide openwrt_sdk_url manually."
+              exit 1
+            fi
+            SDK_URL="${BASE_URL}${SDK_NAME}"
+            SDK_FILE="${SDK_NAME}"
+          fi
 
           echo "Downloading OpenWrt SDK from: ${SDK_URL}"
-          wget -q --show-progress -O openwrt-sdk.tar.xz "${SDK_URL}" || {
-            echo "Failed to download SDK. Please verify the target/release combination."
+          wget -q --show-progress -O "${SDK_FILE}" "${SDK_URL}" || {
+            echo "Failed to download SDK. Please verify the target/release combination or provide openwrt_sdk_url."
             exit 1
           }
 
-          tar -xJf openwrt-sdk.tar.xz
+          case "${SDK_FILE}" in
+            *.tar.xz) tar -xJf "${SDK_FILE}" ;;
+            *.tar.zst) tar --zstd -xf "${SDK_FILE}" || { zstd -d "${SDK_FILE}" -o openwrt-sdk.tar && tar -xf openwrt-sdk.tar; } ;;
+            *) echo "Unsupported archive format: ${SDK_FILE}"; exit 1 ;;
+          esac
           mv openwrt-sdk-* openwrt-sdk
 
           # Locate toolchain directory (the part before "_gcc" contains arch info)
