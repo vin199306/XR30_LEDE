@@ -250,28 +250,6 @@ jobs:
           make -j$(nproc)
           make install
 
-      - name: Build static x265
-        run: |
-          X265_VERSION="3.6"
-          wget -q --show-progress "https://bitbucket.org/multicoreware/x265_git/downloads/x265_${X265_VERSION}.tar.gz"
-          tar -xzf "x265_${X265_VERSION}.tar.gz"
-          mv "x265_${X265_VERSION}" x265-src
-
-          export PATH="${CROSS_BIN_DIR}:$PATH"
-          cd x265-src
-          cmake -S source -B build \
-            -DCMAKE_INSTALL_PREFIX="${X265_PREFIX}" \
-            -DCMAKE_C_COMPILER="${CC}" \
-            -DCMAKE_CXX_COMPILER="${CXX}" \
-            -DCMAKE_AR="${AR}" \
-            -DCMAKE_RANLIB="${RANLIB}" \
-            -DCMAKE_SYSTEM_NAME=Linux \
-            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-            -DENABLE_SHARED=OFF \
-            -DENABLE_CLI=OFF \
-            -DENABLE_ASSEMBLY=OFF
-          cmake --build build -j$(nproc)
-          cmake --install build
 
       - name: Configure FFmpeg
         run: |
