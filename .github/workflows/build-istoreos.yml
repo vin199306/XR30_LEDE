@@ -64,6 +64,8 @@ jobs:
 
       - name: Download and extract OpenWrt SDK
         run: |
+          set -euo pipefail
+
           if [ -n "${OPENWRT_SDK_URL}" ]; then
             SDK_URL="${OPENWRT_SDK_URL}"
             SDK_FILE="openwrt-sdk.download"
@@ -71,20 +73,36 @@ jobs:
             TARGET_SLUG="${OPENWRT_TARGET////-}"
             BASE_URL="https://downloads.openwrt.org/releases/${OPENWRT_RELEASE}/targets/${OPENWRT_TARGET}/"
             echo "Auto-detecting SDK from ${BASE_URL}"
-            SDK_NAME=$(wget -qO- "${BASE_URL}" | grep -oE 'openwrt-sdk-[^"]+\.tar\.(xz|zst)' | head -n1)
+
+            SDK_NAME=$(wget -qO- "${BASE_URL}" | grep -oE 'openwrt-sdk-[^"]+\.tar\.(xz|zst)' | head -n1 || true)
             if [ -z "${SDK_NAME}" ]; then
-              echo "Unable to detect SDK filename. Please provide openwrt_sdk_url manually."
+              echo "Unable to detect SDK filename from ${BASE_URL}."
+              echo "Listing ${BASE_URL} HTML (first 200 lines) to help debug:"
+              wget -qO- "${BASE_URL}" | sed -n '1,200p' || true
+              echo "Please provide openwrt_sdk_url manually via workflow input 'openwrt_sdk_url'."
               exit 1
             fi
+
             SDK_URL="${BASE_URL}${SDK_NAME}"
             SDK_FILE="${SDK_NAME}"
           fi
 
           echo "Downloading OpenWrt SDK from: ${SDK_URL}"
-          wget -q --show-progress -O "${SDK_FILE}" "${SDK_URL}" || {
-            echo "Failed to download SDK. Please verify the target/release combination or provide openwrt_sdk_url."
+
+          # Retry download a few times — network flakiness can cause transient failures
+          attempts=0
+          max_attempts=3
+          until [ $attempts -ge $max_attempts ]; do
+            attempts=$((attempts + 1))
+            wget -q --show-progress -O "${SDK_FILE}" "${SDK_URL}" && break
+            echo "Download attempt ${attempts} failed, retrying..."
+            sleep 5
+          done
+
+          if [ ! -s "${SDK_FILE}" ]; then
+            echo "Failed to download SDK after ${max_attempts} attempts. Please verify the target/release combination or provide openwrt_sdk_url."
             exit 1
-          }
+          fi
 
           case "${SDK_FILE}" in
             *.tar.xz) tar -xJf "${SDK_FILE}" ;;
@@ -94,28 +112,52 @@ jobs:
 
           # Remove the archive so it does not match the mv pattern below
           rm -f "${SDK_FILE}" openwrt-sdk.tar
-          mv openwrt-sdk-* openwrt-sdk
+          mv openwrt-sdk-* openwrt-sdk || true
 
-          # Locate toolchain directory (use absolute paths for later steps)
-          REL_TOOLCHAIN=$(find openwrt-sdk/staging_dir -maxdepth 1 -type d -name 'toolchain-aarch64*' | head -n1)
-          REL_TARGET=$(find openwrt-sdk/staging_dir -maxdepth 1 -type d -name 'target-aarch64*' | head -n1)
-          TOOLCHAIN_DIR="${GITHUB_WORKSPACE}/${REL_TOOLCHAIN}"
-          TARGET_DIR="${GITHUB_WORKSPACE}/${REL_TARGET}"
+          # Locate toolchain/target directories (some SDK layouts nest one level deeper)
+          REL_TOOLCHAIN=$(find openwrt-sdk/staging_dir -maxdepth 2 -type d -name 'toolchain-aarch64*' | head -n1 || true)
+          REL_TARGET=$(find openwrt-sdk/staging_dir -maxdepth 2 -type d -name 'target-aarch64*' | head -n1 || true)
 
-          if [ -z "${TOOLCHAIN_DIR}" ]; then
-            echo "Unable to locate OpenWrt toolchain directory"
-            ls -la openwrt-sdk/staging_dir
+          if [ -z "${REL_TOOLCHAIN}" ]; then
+            echo "Unable to locate OpenWrt toolchain directory (REL_TOOLCHAIN empty)."
+            echo "Contents of openwrt-sdk/staging_dir:"
+            ls -la openwrt-sdk/staging_dir || true
             exit 1
           fi
 
-          CROSS_BIN=$(find "${TOOLCHAIN_DIR}/bin" -maxdepth 1 -name 'aarch64-openwrt-linux-*-gcc' | head -n1)
+          if [ -z "${REL_TARGET}" ]; then
+            echo "Unable to locate OpenWrt target directory (REL_TARGET empty)."
+            echo "Contents of openwrt-sdk/staging_dir:"
+            ls -la openwrt-sdk/staging_dir || true
+            exit 1
+          fi
+
+          # Make absolute paths for later steps
+          TOOLCHAIN_DIR=$(readlink -f "${REL_TOOLCHAIN}")
+          TARGET_DIR=$(readlink -f "${REL_TARGET}")
+
+          if [ ! -d "${TOOLCHAIN_DIR}/bin" ]; then
+            echo "Toolchain bin directory not found: ${TOOLCHAIN_DIR}/bin"
+            ls -la "${TOOLCHAIN_DIR}" || true
+            exit 1
+          fi
+
+          # Broaden the name match slightly in case the triplet varies
+          CROSS_BIN=$(find "${TOOLCHAIN_DIR}/bin" -maxdepth 1 -type f -name 'aarch64-openwrt-linux*gcc' | head -n1 || true)
           if [ -z "${CROSS_BIN}" ]; then
-            echo "Unable to locate cross compiler"
+            echo "Unable to locate cross compiler in ${TOOLCHAIN_DIR}/bin"
             ls -la "${TOOLCHAIN_DIR}/bin"
             exit 1
           fi
 
-          CROSS_PREFIX=$(basename "${CROSS_BIN}" gcc)
+          # Remove trailing 'gcc' to form the cross-prefix reliably
+          CROSS_PREFIX=$(basename "${CROSS_BIN}")
+          CROSS_PREFIX="${CROSS_PREFIX%gcc}"
+
+          echo "Detected CROSS_BIN=${CROSS_BIN}"
+          echo "Detected CROSS_PREFIX=${CROSS_PREFIX}"
+          echo "TOOLCHAIN_DIR=${TOOLCHAIN_DIR}"
+          echo "TARGET_DIR=${TARGET_DIR}"
 
           echo "TOOLCHAIN_DIR=${TOOLCHAIN_DIR}" >> $GITHUB_ENV
           echo "TARGET_DIR=${TARGET_DIR}" >> $GITHUB_ENV
