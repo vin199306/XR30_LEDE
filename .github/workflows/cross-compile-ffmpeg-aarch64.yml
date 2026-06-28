@@ -94,9 +94,11 @@ jobs:
           rm -f "${SDK_FILE}" openwrt-sdk.tar
           mv openwrt-sdk-* openwrt-sdk
 
-          # Locate toolchain directory (the part before "_gcc" contains arch info)
-          TOOLCHAIN_DIR=$(find openwrt-sdk/staging_dir -maxdepth 1 -type d -name 'toolchain-aarch64*' | head -n1)
-          TARGET_DIR=$(find openwrt-sdk/staging_dir -maxdepth 1 -type d -name 'target-aarch64*' | head -n1)
+          # Locate toolchain directory (use absolute paths for later steps)
+          REL_TOOLCHAIN=$(find openwrt-sdk/staging_dir -maxdepth 1 -type d -name 'toolchain-aarch64*' | head -n1)
+          REL_TARGET=$(find openwrt-sdk/staging_dir -maxdepth 1 -type d -name 'target-aarch64*' | head -n1)
+          TOOLCHAIN_DIR="${GITHUB_WORKSPACE}/${REL_TOOLCHAIN}"
+          TARGET_DIR="${GITHUB_WORKSPACE}/${REL_TARGET}"
 
           if [ -z "${TOOLCHAIN_DIR}" ]; then
             echo "Unable to locate OpenWrt toolchain directory"
@@ -190,8 +192,12 @@ jobs:
             --target-os=linux
             --arch=aarch64
             --cpu=cortex-a53
+            --cc="${CC}"
+            --ld="${LD}"
             --cross-prefix="${CROSS_PREFIX}"
             --sysroot="${TARGET_DIR}"
+            --extra-cflags="-I${TARGET_DIR}/usr/include"
+            --extra-ldflags="-L${TARGET_DIR}/usr/lib"
             --enable-cross-compile
             --prefix="${GITHUB_WORKSPACE}/ffmpeg-install"
             --disable-ffplay
