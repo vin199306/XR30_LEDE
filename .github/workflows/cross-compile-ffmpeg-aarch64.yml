@@ -260,11 +260,16 @@ jobs:
             sed -i "s/#define HAVE_${func} 0/#define HAVE_${func} 1/g" "${CONFIG_H}"
           done
 
+          # Network functions provided by musl
+          for func in INET_ATON INET_PTON POLL GETADDRINFO GETNAMEINFO; do
+            sed -i "s/#define HAVE_${func} 0/#define HAVE_${func} 1/g" "${CONFIG_H}"
+          done
+
           # Remove the dangerous getenv macro that breaks system headers
           sed -i '/^#define getenv(x) NULL$/d' "${CONFIG_H}"
 
           echo "Patched HAVE_* macros (sample):"
-          grep -E 'HAVE_(CBRT|RINT|GETENV|LOCALTIME_R)' "${CONFIG_H}" || true
+          grep -E 'HAVE_(CBRT|RINT|GETENV|LOCALTIME_R|INET_ATON)' "${CONFIG_H}" || true
 
       - name: Compile FFmpeg
         run: |
