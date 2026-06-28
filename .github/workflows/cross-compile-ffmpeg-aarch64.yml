@@ -1,322 +1,361 @@
-name: Cross-compile FFmpeg for OpenWrt aarch64_cortex-a53
+name: Build FFmpeg for OpenWrt (aarch64_cortex-a53)
+
+# ============================================================================
+# 交叉编译 FFmpeg 二进制程序，适用于 aarch64_cortex-a53 架构的 OpenWrt 设备
+# 使用 OpenWrt 官方 SDK 提供的工具链进行交叉编译
+# ============================================================================
 
 on:
   workflow_dispatch:
     inputs:
       ffmpeg_version:
-        description: 'FFmpeg version to compile'
+        description: 'FFmpeg 版本 (tag/branch)'
         required: true
-        default: '7.0.2'
-      openwrt_release:
-        description: 'OpenWrt release version'
-        required: true
-        default: '24.10.2'
-      openwrt_target:
-        description: 'OpenWrt target (e.g. mediatek/filogic)'
-        required: true
-        default: 'mediatek/filogic'
-      enable_https:
-        description: 'Enable HTTPS support (requires static OpenSSL build)'
-        required: true
-        default: 'false'
-      openwrt_sdk_url:
-        description: 'Optional full SDK URL (auto-detected if empty)'
-        required: false
-        default: ''
+        default: 'n7.1.1'
+      build_type:
+        description: '构建类型'
+        type: choice
+        options:
+          - static
+          - shared
+        default: static
+      enable_gpl:
+        description: '启用 GPL 编解码器 (x264 等)'
+        type: boolean
+        default: true
+      optimize_size:
+        description: '体积优化 (small + hardcoded-tables + lto)'
+        type: boolean
+        default: true
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/ffmpeg-openwrt-aarch64.yml'
+
+# 环境常量 — OpenWrt SDK 版本与目标架构配置
+env:
+  OPENWRT_VERSION: '24.10.2'
+  TARGET: 'mvebu'           # OpenWrt target (mvebu 平台使用 cortex-a53)
+  SUBTARGET: 'cortexa53'    # OpenWrt subtarget
+  ARCH: 'aarch64_cortex-a53' # 包架构名 (staging_dir 目录名使用)
+  GCC_VERSION: '13.3.0'      # SDK 内 GCC 版本
+
+permissions:
+  contents: read
+
+# 同一时间只允许一个构建运行
+concurrency:
+  group: ffmpeg-openwrt-build
+  cancel-in-progress: true
 
 jobs:
-  build-ffmpeg:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 60
 
+    # 将 workflow_dispatch 输入转换为环境变量，兼容 push 触发时的默认值
     env:
-      FFMPEG_VERSION: ${{ github.event.inputs.ffmpeg_version }}
-      OPENWRT_RELEASE: ${{ github.event.inputs.openwrt_release }}
-      OPENWRT_TARGET: ${{ github.event.inputs.openwrt_target }}
-      ENABLE_HTTPS: ${{ github.event.inputs.enable_https }}
-      OPENWRT_SDK_URL: ${{ github.event.inputs.openwrt_sdk_url }}
+      FFMPEG_VERSION: ${{ github.event.inputs.ffmpeg_version || 'n7.1.1' }}
+      BUILD_TYPE: ${{ github.event.inputs.build_type || 'static' }}
+      ENABLE_GPL: ${{ github.event.inputs.enable_gpl || 'true' }}
+      OPTIMIZE_SIZE: ${{ github.event.inputs.optimize_size || 'true' }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install host build dependencies
+      # ======================================================================
+      # 步骤 1: 安装构建依赖
+      # ======================================================================
+      - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             build-essential \
-            yasm \
-            nasm \
             pkg-config \
-            libtool \
-            gperf \
-            bison \
-            flex \
-            texinfo \
-            wget \
-            xz-utils \
+            nasm \
+            yasm \
             zstd \
-            cmake \
-            perl \
-            python3
+            file \
+            cmake
 
+      # ======================================================================
+      # 步骤 2: 缓存 OpenWrt SDK (加速后续构建)
+      # ======================================================================
+      - name: Cache OpenWrt SDK
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: openwrt-sdk
+          key: openwrt-sdk-${{ env.OPENWRT_VERSION }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-v1
+
+      # ======================================================================
+      # 步骤 3: 下载并解压 OpenWrt SDK
+      # ============================================================================
       - name: Download and extract OpenWrt SDK
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
-          if [ -n "${OPENWRT_SDK_URL}" ]; then
-            SDK_URL="${OPENWRT_SDK_URL}"
-            SDK_FILE="openwrt-sdk.download"
-          else
-            TARGET_SLUG="${OPENWRT_TARGET////-}"
-            BASE_URL="https://downloads.openwrt.org/releases/${OPENWRT_RELEASE}/targets/${OPENWRT_TARGET}/"
-            echo "Auto-detecting SDK from ${BASE_URL}"
-            SDK_NAME=$(wget -qO- "${BASE_URL}" | grep -oE 'openwrt-sdk-[^"]+\.tar\.(xz|zst)' | head -n1)
-            if [ -z "${SDK_NAME}" ]; then
-              echo "Unable to detect SDK filename. Please provide openwrt_sdk_url manually."
-              exit 1
-            fi
-            SDK_URL="${BASE_URL}${SDK_NAME}"
-            SDK_FILE="${SDK_NAME}"
-          fi
+          URL="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/${TARGET}/${SUBTARGET}/openwrt-sdk-${OPENWRT_VERSION}-${TARGET}-${SUBTARGET}_gcc-${GCC_VERSION}_musl.Linux-x86_64.tar.zst"
+          echo "Downloading SDK: $URL"
+          curl -fSL --retry 3 -o sdk.tar.zst "$URL"
 
-          echo "Downloading OpenWrt SDK from: ${SDK_URL}"
-          wget -q --show-progress -O "${SDK_FILE}" "${SDK_URL}" || {
-            echo "Failed to download SDK. Please verify the target/release combination or provide openwrt_sdk_url."
-            exit 1
-          }
+          mkdir -p openwrt-sdk
+          tar --zstd -xf sdk.tar.zst -C openwrt-sdk --strip-components=1
+          rm sdk.tar.zst
 
-          case "${SDK_FILE}" in
-            *.tar.xz) tar -xJf "${SDK_FILE}" ;;
-            *.tar.zst) tar --zstd -xf "${SDK_FILE}" || { zstd -d "${SDK_FILE}" -o openwrt-sdk.tar && tar -xf openwrt-sdk.tar; } ;;
-            *) echo "Unsupported archive format: ${SDK_FILE}"; exit 1 ;;
-          esac
+          echo "SDK extracted. staging_dir contents:"
+          ls -la openwrt-sdk/staging_dir/
 
-          # Remove the archive so it does not match the mv pattern below
-          rm -f "${SDK_FILE}" openwrt-sdk.tar
-          mv openwrt-sdk-* openwrt-sdk
+      # ======================================================================
+      # 步骤 4: 配置交叉编译环境 (工具链路径、PATH、pkg-config)
+      # ============================================================================
+      - name: Setup cross-compile environment
+        run: |
+          set -e
+          SDK_DIR="$(pwd)/openwrt-sdk"
 
-          # Locate toolchain directory (use absolute paths for later steps)
-          REL_TOOLCHAIN=$(find openwrt-sdk/staging_dir -maxdepth 1 -type d -name 'toolchain-aarch64*' | head -n1)
-          REL_TARGET=$(find openwrt-sdk/staging_dir -maxdepth 1 -type d -name 'target-aarch64*' | head -n1)
-          TOOLCHAIN_DIR="${GITHUB_WORKSPACE}/${REL_TOOLCHAIN}"
-          TARGET_DIR="${GITHUB_WORKSPACE}/${REL_TARGET}"
-
-          if [ -z "${TOOLCHAIN_DIR}" ]; then
-            echo "Unable to locate OpenWrt toolchain directory"
-            ls -la openwrt-sdk/staging_dir
+          # 定位工具链目录 (使用 glob 匹配，兼容不同 GCC 版本)
+          TOOLCHAIN_DIR=$(find "$SDK_DIR/staging_dir" -maxdepth 1 -type d -name "toolchain-*" | head -1)
+          if [ -z "$TOOLCHAIN_DIR" ]; then
+            echo "ERROR: Toolchain directory not found!"
+            ls -la "$SDK_DIR/staging_dir/"
             exit 1
           fi
+          echo "Toolchain: $TOOLCHAIN_DIR"
 
-          CROSS_BIN=$(find "${TOOLCHAIN_DIR}/bin" -maxdepth 1 -name 'aarch64-openwrt-linux-*-gcc' | head -n1)
-          if [ -z "${CROSS_BIN}" ]; then
-            echo "Unable to locate cross compiler"
-            ls -la "${TOOLCHAIN_DIR}/bin"
-            exit 1
+          # 定位目标库目录 (SDK 可能不包含此目录)
+          TARGET_DIR=$(find "$SDK_DIR/staging_dir" -maxdepth 1 -type d -name "target-*" | head -1)
+          echo "Target dir: ${TARGET_DIR:-<none>}"
+
+          # 导出环境变量到后续步骤
+          echo "STAGING_DIR=$TOOLCHAIN_DIR" >> $GITHUB_ENV
+          echo "TOOLCHAIN_DIR=$TOOLCHAIN_DIR" >> $GITHUB_ENV
+          echo "TARGET_DIR=${TARGET_DIR}"   >> $GITHUB_ENV
+
+          # 将工具链 bin 目录添加到 PATH
+          echo "$TOOLCHAIN_DIR/bin" >> $GITHUB_PATH
+
+          # 配置 pkg-config 交叉编译搜索路径
+          if [ -n "$TARGET_DIR" ] && [ -d "$TARGET_DIR/usr/lib/pkgconfig" ]; then
+            echo "PKG_CONFIG_PATH=$TARGET_DIR/usr/lib/pkgconfig"    >> $GITHUB_ENV
+            echo "PKG_CONFIG_LIBDIR=$TARGET_DIR/usr/lib/pkgconfig"  >> $GITHUB_ENV
+            echo "PKG_CONFIG_SYSROOT_DIR=$TARGET_DIR"               >> $GITHUB_ENV
           fi
 
-          CROSS_PREFIX=$(basename "${CROSS_BIN}" gcc)
+          # 验证交叉编译器可用
+          echo "=== Cross-compiler version ==="
+          aarch64-openwrt-linux-musl-gcc --version
+          echo "=== Cross-compiler ready ==="
 
-          echo "TOOLCHAIN_DIR=${TOOLCHAIN_DIR}" >> $GITHUB_ENV
-          echo "TARGET_DIR=${TARGET_DIR}" >> $GITHUB_ENV
-          echo "CROSS_PREFIX=${CROSS_PREFIX}" >> $GITHUB_ENV
-          echo "CROSS_BIN_DIR=${TOOLCHAIN_DIR}/bin" >> $GITHUB_ENV
+      # ======================================================================
+      # 步骤 5: 获取 FFmpeg 源代码
+      # ============================================================================
+      - name: Checkout FFmpeg source
+        uses: actions/checkout@v4
+        with:
+          repository: FFmpeg/FFmpeg
+          ref: ${{ env.FFMPEG_VERSION }}
+          path: ffmpeg-src
+          fetch-depth: 1
 
-      - name: Setup cross-compilation environment
-        run: |
-          export PATH="${CROSS_BIN_DIR}:$PATH"
-          export STAGING_DIR="${TARGET_DIR}"
-          export CC="${CROSS_PREFIX}gcc"
-          export CXX="${CROSS_PREFIX}g++"
-          export AR="${CROSS_PREFIX}ar"
-          export AS="${CROSS_PREFIX}as"
-          export LD="${CROSS_PREFIX}ld"
-          export NM="${CROSS_PREFIX}nm"
-          export RANLIB="${CROSS_PREFIX}ranlib"
-          export STRIP="${CROSS_PREFIX}strip"
-
-          # Verify toolchain
-          echo "Cross compiler version:"
-          "${CC}" --version
-
-          # Export for subsequent steps
-          echo "PATH=${PATH}" >> $GITHUB_ENV
-          echo "STAGING_DIR=${STAGING_DIR}" >> $GITHUB_ENV
-          echo "CC=${CC}" >> $GITHUB_ENV
-          echo "CXX=${CXX}" >> $GITHUB_ENV
-          echo "AR=${AR}" >> $GITHUB_ENV
-          echo "AS=${AS}" >> $GITHUB_ENV
-          echo "LD=${LD}" >> $GITHUB_ENV
-          echo "NM=${NM}" >> $GITHUB_ENV
-          echo "RANLIB=${RANLIB}" >> $GITHUB_ENV
-          echo "STRIP=${STRIP}" >> $GITHUB_ENV
-
-      - name: Download FFmpeg source
-        run: |
-          FFMPEG_TARBALL="ffmpeg-${FFMPEG_VERSION}.tar.xz"
-          wget -q --show-progress "https://ffmpeg.org/releases/${FFMPEG_TARBALL}"
-          tar -xJf "${FFMPEG_TARBALL}"
-          mv "ffmpeg-${FFMPEG_VERSION}" ffmpeg-src
-
-      - name: Build static OpenSSL for HTTPS support (optional)
-        if: env.ENABLE_HTTPS == 'true'
-        run: |
-          OPENSSL_VERSION="3.2.1"
-          wget -q --show-progress "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
-          tar -xzf "openssl-${OPENSSL_VERSION}.tar.gz"
-          mv "openssl-${OPENSSL_VERSION}" openssl-src
-
-          export PATH="${CROSS_BIN_DIR}:$PATH"
-          cd openssl-src
-
-          ./Configure \
-            linux-aarch64 \
-            --cross-compile-prefix="${CROSS_PREFIX}" \
-            --prefix="${GITHUB_WORKSPACE}/openssl-install" \
-            --openssldir="${GITHUB_WORKSPACE}/openssl-install" \
-            no-shared \
-            no-tests \
-            no-unit-test \
-            -static
-
-          make -j$(nproc)
-          make install_sw
-
-          echo "OPENSSL_PREFIX=${GITHUB_WORKSPACE}/openssl-install" >> $GITHUB_ENV
-          echo "OPENSSL_CFLAGS=-I${GITHUB_WORKSPACE}/openssl-install/include" >> $GITHUB_ENV
-          echo "OPENSSL_LIBS=-L${GITHUB_WORKSPACE}/openssl-install/lib -lssl -lcrypto" >> $GITHUB_ENV
-
+      # ======================================================================
+      # 步骤 6: 配置 FFmpeg (交叉编译选项)
+      # ============================================================================
       - name: Configure FFmpeg
+        working-directory: ffmpeg-src
         run: |
-          cd ffmpeg-src
+          set -e
 
+          # 组装 configure 参数
           CONFIG_FLAGS=(
-            --target-os=linux
+            # 交叉编译核心选项
+            --enable-cross-compile
+            --cross-prefix=aarch64-openwrt-linux-musl-
             --arch=aarch64
             --cpu=cortex-a53
-            --cc="${CC}"
-            --ld="${LD}"
-            --cross-prefix="${CROSS_PREFIX}"
-            --sysroot="${TARGET_DIR}"
-            --extra-cflags="-I${TARGET_DIR}/usr/include"
-            --extra-ldflags="-L${TARGET_DIR}/usr/lib"
-            --enable-cross-compile
-            --prefix="${GITHUB_WORKSPACE}/ffmpeg-install"
-            --disable-ffplay
-            --disable-ffprobe
+            --target-os=linux
+            --prefix=/usr
+            --pkg-config=pkg-config
+
+            # 线程与压缩支持
+            --enable-pthreads
+            --enable-zlib
+
+            # 禁用不需要的功能 (减小体积)
             --disable-doc
             --disable-debug
-            --enable-small
-            --disable-shared
-            --enable-static
-            --disable-asm
-            --enable-gpl
-            --enable-version3
-            --enable-nonfree
-            --enable-network
-            --enable-protocol=http,file,tcp,udp
-            --enable-demuxer=hls,mpegts,mpegvideo,flv,mov,mp4,m4v,matroska
-            --enable-muxer=mpegts,mp4,mov,matroska
-            --enable-decoder=h264,hevc,aac,mp3,mp2
-            --enable-parser=h264,hevc,aac,mpegaudio
-            --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc
+            --disable-lzma
+            --disable-vaapi
+            --disable-vdpau
+            --disable-outdevs
+            --disable-ffplay
+            --disable-runtime-cpudetect
+            --disable-x86asm
+
+            # 启用 ARM NEON 与 VFP 硬件浮点
+            --enable-neon
+            --enable-vfp
           )
 
-          if [ "${ENABLE_HTTPS}" = "true" ]; then
-            CONFIG_FLAGS+=(
-              --enable-openssl
-              --extra-cflags="${OPENSSL_CFLAGS}"
-              --extra-ldflags="${OPENSSL_LIBS} -static"
-              --enable-protocol=https,tls
-            )
+          # 构建类型: 静态 / 动态
+          if [ "$BUILD_TYPE" = "static" ]; then
+            CONFIG_FLAGS+=(--enable-static --disable-shared --pkg-config-flags=--static)
           else
-            CONFIG_FLAGS+=(--disable-openssl)
+            CONFIG_FLAGS+=(--enable-shared --disable-static)
           fi
 
-          echo "FFmpeg configure flags:"
-          printf '%s\n' "${CONFIG_FLAGS[@]}"
+          # GPL 编解码器
+          if [ "$ENABLE_GPL" = "true" ]; then
+            CONFIG_FLAGS+=(--enable-gpl --enable-version3)
+          fi
 
+          # 体积优化
+          if [ "$OPTIMIZE_SIZE" = "true" ]; then
+            CONFIG_FLAGS+=(--enable-small --enable-hardcoded-tables --enable-lto)
+          fi
+
+          # 额外编译/链接标志
+          EXTRA_CFLAGS="-O2 -mcpu=cortex-a53 -mtune=cortex-a53"
+          EXTRA_LDFLAGS=""
+          if [ -n "$TARGET_DIR" ]; then
+            EXTRA_CFLAGS="$EXTRA_CFLAGS -I$TARGET_DIR/usr/include"
+            EXTRA_LDFLAGS="-L$TARGET_DIR/usr/lib"
+          fi
+          CONFIG_FLAGS+=(--extra-cflags="$EXTRA_CFLAGS")
+          CONFIG_FLAGS+=(--extra-ldflags="$EXTRA_LDFLAGS")
+          CONFIG_FLAGS+=(--extra-libs="-lpthread -lm -lz")
+
+          echo "=== Running ./configure ==="
           ./configure "${CONFIG_FLAGS[@]}"
 
-      - name: Patch FFmpeg config for musl compatibility
-        run: |
-          cd ffmpeg-src
-          # FFmpeg's configure often fails to detect these math functions when cross-compiling
-          # against musl. Force HAVE_* to 1 to avoid "static declaration follows non-static
-          # declaration" errors in libavutil/libm.h.
-          CONFIG_H="config.h"
-          [ -f "ffbuild/config.h" ] && CONFIG_H="ffbuild/config.h"
-          echo "Patching ${CONFIG_H}"
+          echo ""
+          echo "=== Configuration summary ==="
+          grep -E "^(install prefix|C compiler|arch|cpu|big endian|runtime cpudetect|NEON)" ffbuild/config.log 2>/dev/null || true
 
-          # Math functions provided by musl that FFmpeg may fail to detect
-          for func in \
-            ATAN2F ATANF CBRT CBRTF COPYSIGN COSF ERF ERFC EXP2 EXP2F EXPF \
-            FMAXF FMINF HYPOT ISFINITE ISINF ISNAN LGAMMA LLROUND LLROUNDF \
-            LOG2 LOG2F LOGB LRINT LRINTF LROUND LROUNDF NANF NEARBYINT POWF \
-            RINT RINTF ROUND ROUNDF SINF SQRTF TANF TRUNC TRUNCF; do
-            sed -i "s/#define HAVE_${func} 0/#define HAVE_${func} 1/g" "${CONFIG_H}"
+      # ======================================================================
+      # 步骤 7: 编译 FFmpeg
+      # ============================================================================
+      - name: Build FFmpeg
+        working-directory: ffmpeg-src
+        run: |
+          set -e
+          make -j"$(nproc)"
+          echo "=== Build complete ==="
+
+      # ======================================================================
+      # 步骤 8: 安装到临时目录
+      # ============================================================================
+      - name: Install FFmpeg
+        working-directory: ffmpeg-src
+        run: |
+          set -e
+          make install DESTDIR="$GITHUB_WORKSPACE/ffmpeg-install"
+
+          echo "=== Installed files ==="
+          find "$GITHUB_WORKSPACE/ffmpeg-install" -type f | sort
+
+      # ======================================================================
+      # 步骤 9: Strip 二进制文件 (减小体积)
+      # ============================================================================
+      - name: Strip binaries
+        run: |
+          BIN_DIR="ffmpeg-install/usr/bin"
+          STRIP=$(find openwrt-sdk/staging_dir -name "aarch64-openwrt-linux-musl-strip" | head -1)
+
+          if [ -z "$STRIP" ]; then
+            echo "WARNING: cross-strip not found, skipping strip"
+            exit 0
+          fi
+
+          for bin in "$BIN_DIR"/ffmpeg "$BIN_DIR"/ffprobe; do
+            if [ -f "$bin" ]; then
+              echo "Stripping: $bin"
+              echo "  before: $(du -h "$bin" | cut -f1)"
+              "$STRIP" --strip-all "$bin"
+              echo "  after:  $(du -h "$bin" | cut -f1)"
+            fi
           done
 
-          # Standard libc functions available on Linux/musl
-          for func in GETENV SETENV UNSETENV LOCALTIME_R GMTIME_R STRPTIME STRTOK_R; do
-            sed -i "s/#define HAVE_${func} 0/#define HAVE_${func} 1/g" "${CONFIG_H}"
+      # ======================================================================
+      # 步骤 10: 验证二进制架构
+      # ============================================================================
+      - name: Verify binary architecture
+        run: |
+          echo "=== Binary verification ==="
+          for bin in ffmpeg-install/usr/bin/ffmpeg ffmpeg-install/usr/bin/ffprobe; do
+            if [ -f "$bin" ]; then
+              echo "--- $bin ---"
+              file "$bin"
+              readelf -h "$bin" | grep -E "Class|Machine|Flags"
+              echo "Size: $(du -h "$bin" | cut -f1)"
+              echo ""
+            fi
           done
 
-          # Network functions provided by musl
-          for func in INET_ATON INET_PTON POLL GETADDRINFO GETNAMEINFO; do
-            sed -i "s/#define HAVE_${func} 0/#define HAVE_${func} 1/g" "${CONFIG_H}"
-          done
-
-          # Remove the dangerous getenv macro that breaks system headers
-          sed -i '/^#define getenv(x) NULL$/d' "${CONFIG_H}"
-
-          echo "Patched HAVE_* macros (sample):"
-          grep -E 'HAVE_(CBRT|RINT|GETENV|LOCALTIME_R|INET_ATON)' "${CONFIG_H}" || true
-
-      - name: Compile FFmpeg
+      # ======================================================================
+      # 步骤 11: 打包编译产物
+      # ============================================================================
+      - name: Package artifacts
         run: |
-          cd ffmpeg-src
-          export PATH="${CROSS_BIN_DIR}:$PATH"
-          make -j$(nproc)
-          make install
+          PKG_NAME="ffmpeg-${FFMPEG_VERSION}-openwrt-${ARCH}-${BUILD_TYPE}"
 
-      - name: Strip and inspect binary
-        run: |
-          file "${GITHUB_WORKSPACE}/ffmpeg-install/bin/ffmpeg"
-          ls -lh "${GITHUB_WORKSPACE}/ffmpeg-install/bin/ffmpeg"
-          "${STRIP}" "${GITHUB_WORKSPACE}/ffmpeg-install/bin/ffmpeg"
-          ls -lh "${GITHUB_WORKSPACE}/ffmpeg-install/bin/ffmpeg"
+          mkdir -p artifacts
 
-      - name: Create deployment tarball
-        run: |
-          OUTPUT_NAME="ffmpeg-${FFMPEG_VERSION}-openwrt-aarch64_cortex-a53-${OPENWRT_RELEASE}"
-          mkdir -p "${OUTPUT_NAME}"
-          cp "${GITHUB_WORKSPACE}/ffmpeg-install/bin/ffmpeg" "${OUTPUT_NAME}/ffmpeg"
-          printf '%s\n' \
-            "FFmpeg ${FFMPEG_VERSION} for OpenWrt aarch64_cortex-a53" \
-            "=========================================================" \
-            "Target: ${OPENWRT_TARGET}" \
-            "OpenWrt release: ${OPENWRT_RELEASE}" \
-            "Cross prefix: ${CROSS_PREFIX}" \
-            "HTTPS support: ${ENABLE_HTTPS}" \
-            "" \
-            "Install:" \
-            "  scp ${OUTPUT_NAME}/ffmpeg root@openwrt:/usr/bin/ffmpeg" \
-            "  chmod +x /usr/bin/ffmpeg" \
-            "" \
-            "Verify:" \
-            "  ffmpeg -version" > "${OUTPUT_NAME}/README.txt"
-          tar czf "${OUTPUT_NAME}.tar.gz" "${OUTPUT_NAME}"
+          # 主包: tar.gz
+          cd ffmpeg-install
+          tar -czf "$GITHUB_WORKSPACE/artifacts/${PKG_NAME}.tar.gz" .
+          cd ..
 
-      - name: Upload artifact
+          # 文件清单
+          find ffmpeg-install -type f | sed 's|ffmpeg-install/||' | sort > artifacts/file-list.txt
+
+          # 构建信息
+          {
+            echo "FFmpeg version: ${FFMPEG_VERSION}"
+            echo "OpenWrt version: ${OPENWRT_VERSION}"
+            echo "Target: ${TARGET}/${SUBTARGET}"
+            echo "Architecture: ${ARCH}"
+            echo "GCC: ${GCC_VERSION}"
+            echo "Build type: ${BUILD_TYPE}"
+            echo "Build date: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+            echo "Runner: $(uname -a)"
+          } > artifacts/build-info.txt
+
+          echo "PKG_NAME=$PKG_NAME" >> $GITHUB_ENV
+
+          echo "=== Artifacts ==="
+          ls -lh artifacts/
+
+      # ======================================================================
+      # 步骤 12: 上传编译产物
+      # ============================================================================
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-openwrt-aarch64_cortex-a53
-          path: ffmpeg-*.tar.gz
-          if-no-files-found: error
+          name: ${{ env.PKG_NAME }}
+          path: artifacts/
+          retention-days: 30
+          compression-level: 0
 
-      - name: Upload to release (if tagged)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ffmpeg-*.tar.gz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # ======================================================================
+      # 步骤 13: 构建摘要
+      # ============================================================================
+      - name: Build summary
+        if: always()
+        run: |
+          {
+            echo "## Build Summary"
+            echo ""
+            echo "| Item | Value |"
+            echo "|------|-------|"
+            echo "| FFmpeg | ${FFMPEG_VERSION} |"
+            echo "| OpenWrt | ${OPENWRT_VERSION} |"
+            echo "| Target | ${TARGET}/${SUBTARGET} (${ARCH}) |"
+            echo "| GCC | ${GCC_VERSION} |"
+            echo "| Build type | ${BUILD_TYPE} |"
+            echo "| GPL | ${ENABLE_GPL} |"
+            echo "| Size optimized | ${OPTIMIZE_SIZE} |"
+            echo ""
+            echo "### Binary sizes"
+            echo '```'
+            ls -lh ffmpeg-install/usr/bin/ 2>/dev/null || echo "(not available)"
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
