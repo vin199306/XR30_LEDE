@@ -1,112 +1,325 @@
-name: Build iStoreOS(Droidspaces arm64) - Fast Build
+name: Cross-compile FFmpeg for OpenWrt aarch64_cortex-a53
+
 on:
   workflow_dispatch:
+    inputs:
+      ffmpeg_version:
+        description: 'FFmpeg version to compile'
+        required: true
+        default: '7.0.2'
+      openwrt_release:
+        description: 'OpenWrt release version'
+        required: true
+        default: '24.10.2'
+      openwrt_target:
+        description: 'OpenWrt target (e.g. mediatek/filogic)'
+        required: true
+        default: 'mediatek/filogic'
+      enable_https:
+        description: 'Enable HTTPS support (requires static OpenSSL build)'
+        required: true
+        default: 'false'
+      openwrt_sdk_url:
+        description: 'Optional full SDK URL (auto-detected if empty)'
+        required: false
+        default: ''
 
 jobs:
-  build:
-    runs-on: ubuntu-22.04
+  build-ffmpeg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      FFMPEG_VERSION: ${{ github.event.inputs.ffmpeg_version }}
+      OPENWRT_RELEASE: ${{ github.event.inputs.openwrt_release }}
+      OPENWRT_TARGET: ${{ github.event.inputs.openwrt_target }}
+      ENABLE_HTTPS: ${{ github.event.inputs.enable_https }}
+      OPENWRT_SDK_URL: ${{ github.event.inputs.openwrt_sdk_url }}
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 缓存编译文件，大幅加速二次构建
-      - name: Cache ccache & build files
-        uses: actions/cache@v4
-        with:
-          path: |
-            openwrt/.ccache
-            openwrt/dl
-            openwrt/build_dir
-            openwrt/staging_dir
-          key: ${{ runner.os }}-openwrt-istoreos-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-openwrt-istoreos-
-
-      # 修复：losetup 来自 util-linux，精简依赖、静默执行
-      - name: Install minimal dependencies
+      - name: Install host build dependencies
         run: |
-          sudo apt update -qq
-          sudo apt install -qqy build-essential ccache gawk gettext git libelf-dev \
-          libncurses5-dev libssl-dev python3 python3-distutils rsync unzip wget util-linux
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            yasm \
+            nasm \
+            pkg-config \
+            libtool \
+            gperf \
+            bison \
+            flex \
+            texinfo \
+            wget \
+            xz-utils \
+            zstd \
+            cmake \
+            perl \
+            python3
 
-      - name: Clone OpenWrt (shallow) & add feeds
+      - name: Download and extract OpenWrt SDK
         run: |
-          git clone --depth 1 https://git.openwrt.org/openwrt/openwrt.git openwrt
-          cd openwrt
-          echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
-          echo 'src-git nas https://github.com/linkease/nas-packages.git;master' >> feeds.conf.default
-          echo 'src-git nas_luci https://github.com/linkease/nas-packages-luci.git;main' >> feeds.conf.default
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          if [ -n "${OPENWRT_SDK_URL}" ]; then
+            SDK_URL="${OPENWRT_SDK_URL}"
+            SDK_FILE="openwrt-sdk.download"
+          else
+            TARGET_SLUG="${OPENWRT_TARGET////-}"
+            BASE_URL="https://downloads.openwrt.org/releases/${OPENWRT_RELEASE}/targets/${OPENWRT_TARGET}/"
+            echo "Auto-detecting SDK from ${BASE_URL}"
+            SDK_NAME=$(wget -qO- "${BASE_URL}" | grep -oE 'openwrt-sdk-[^"]+\.tar\.(xz|zst)' | head -n1)
+            if [ -z "${SDK_NAME}" ]; then
+              echo "Unable to detect SDK filename. Please provide openwrt_sdk_url manually."
+              exit 1
+            fi
+            SDK_URL="${BASE_URL}${SDK_NAME}"
+            SDK_FILE="${SDK_NAME}"
+          fi
 
-      - name: Write minimal .config (fast build)
+          echo "Downloading OpenWrt SDK from: ${SDK_URL}"
+          wget -q --show-progress -O "${SDK_FILE}" "${SDK_URL}" || {
+            echo "Failed to download SDK. Please verify the target/release combination or provide openwrt_sdk_url."
+            exit 1
+          }
+
+          case "${SDK_FILE}" in
+            *.tar.xz) tar -xJf "${SDK_FILE}" ;;
+            *.tar.zst) tar --zstd -xf "${SDK_FILE}" || { zstd -d "${SDK_FILE}" -o openwrt-sdk.tar && tar -xf openwrt-sdk.tar; } ;;
+            *) echo "Unsupported archive format: ${SDK_FILE}"; exit 1 ;;
+          esac
+
+          # Remove the archive so it does not match the mv pattern below
+          rm -f "${SDK_FILE}" openwrt-sdk.tar
+          mv openwrt-sdk-* openwrt-sdk
+
+          # Locate toolchain directory (use absolute paths for later steps)
+          REL_TOOLCHAIN=$(find openwrt-sdk/staging_dir -maxdepth 1 -type d -name 'toolchain-aarch64*' | head -n1)
+          REL_TARGET=$(find openwrt-sdk/staging_dir -maxdepth 1 -type d -name 'target-aarch64*' | head -n1)
+          TOOLCHAIN_DIR="${GITHUB_WORKSPACE}/${REL_TOOLCHAIN}"
+          TARGET_DIR="${GITHUB_WORKSPACE}/${REL_TARGET}"
+
+          if [ -z "${TOOLCHAIN_DIR}" ]; then
+            echo "Unable to locate OpenWrt toolchain directory"
+            ls -la openwrt-sdk/staging_dir
+            exit 1
+          fi
+
+          CROSS_BIN=$(find "${TOOLCHAIN_DIR}/bin" -maxdepth 1 -name 'aarch64-openwrt-linux-*-gcc' | head -n1)
+          if [ -z "${CROSS_BIN}" ]; then
+            echo "Unable to locate cross compiler"
+            ls -la "${TOOLCHAIN_DIR}/bin"
+            exit 1
+          fi
+
+          CROSS_PREFIX=$(basename "${CROSS_BIN}" gcc)
+
+          echo "TOOLCHAIN_DIR=${TOOLCHAIN_DIR}" >> $GITHUB_ENV
+          echo "TARGET_DIR=${TARGET_DIR}" >> $GITHUB_ENV
+          echo "CROSS_PREFIX=${CROSS_PREFIX}" >> $GITHUB_ENV
+          echo "CROSS_BIN_DIR=${TOOLCHAIN_DIR}/bin" >> $GITHUB_ENV
+
+      - name: Setup cross-compilation environment
         run: |
-          cd openwrt
-          cat > .config <<'EOF'
-          CONFIG_TARGET_armvirt=y
-          CONFIG_TARGET_armvirt_64=y
-          CONFIG_TARGET_armvirt_64_DEVICE_generic=y
-          CONFIG_LIBC="musl"
-          CONFIG_INIT_PROCD=y
+          export PATH="${CROSS_BIN_DIR}:$PATH"
+          export STAGING_DIR="${TARGET_DIR}"
+          export CC="${CROSS_PREFIX}gcc"
+          export CXX="${CROSS_PREFIX}g++"
+          export AR="${CROSS_PREFIX}ar"
+          export AS="${CROSS_PREFIX}as"
+          # Use the compiler driver for linking; raw ld omits libc/startup files
+          export LD="${CROSS_PREFIX}gcc"
+          export NM="${CROSS_PREFIX}nm"
+          export RANLIB="${CROSS_PREFIX}ranlib"
+          export STRIP="${CROSS_PREFIX}strip"
 
-          CONFIG_TARGET_ROOTFS_EXT4FS=y
-          CONFIG_TARGET_ROOTFS_PARTSIZE=512
-          CONFIG_TARGET_ROOTFS_SQUASHFS=n
-          CONFIG_TARGET_ROOTFS_TARGZ=n
-          CONFIG_TARGET_IMAGES_GZIP=n
+          # Verify toolchain
+          echo "Cross compiler version:"
+          "${CC}" --version
 
-          CONFIG_CCACHE=y
-          CONFIG_BUILD_LOG=n
-          CONFIG_DEBUG=n
-          CONFIG_DEBUG_INFO=n
-          CONFIG_KERNEL_DEBUG=n
-          CONFIG_SIGNATURE_CHECK=n
-          CONFIG_USE_STRIP=y
-          CONFIG_OPTIMIZE_FOR_SIZE=y
+          # Export for subsequent steps
+          echo "PATH=${PATH}" >> $GITHUB_ENV
+          echo "STAGING_DIR=${STAGING_DIR}" >> $GITHUB_ENV
+          echo "CC=${CC}" >> $GITHUB_ENV
+          echo "CXX=${CXX}" >> $GITHUB_ENV
+          echo "AR=${AR}" >> $GITHUB_ENV
+          echo "AS=${AS}" >> $GITHUB_ENV
+          echo "LD=${LD}" >> $GITHUB_ENV
+          echo "NM=${NM}" >> $GITHUB_ENV
+          echo "RANLIB=${RANLIB}" >> $GITHUB_ENV
+          echo "STRIP=${STRIP}" >> $GITHUB_ENV
 
-          CONFIG_WIRELESS=n
-          CONFIG_USB=n
-          CONFIG_BLK_DEV_SD=n
-          CONFIG_ATA=n
-          CONFIG_PCI=n
-          CONFIG_NVME_CORE=n
-          CONFIG_VIDEO=n
-          CONFIG_SOUND=n
-          CONFIG_HID=n
-          CONFIG_INPUT=n
-
-          CONFIG_BUILD_DOCS=n
-          CONFIG_INCLUDE_LOCALES=n
-          CONFIG_LUCI_LANG_en=y
-
-          CONFIG_PACKAGE_luci=y
-          CONFIG_PACKAGE_luci-app-firewall=y
-          CONFIG_PACKAGE_opkg=y
-          CONFIG_PACKAGE_luci-app-istorex=y
-          CONFIG_PACKAGE_luci-app-linkease=y
-          EOF
-          make defconfig
-
-      # 只编译 rootfs，跳过内核/多余镜像
-      - name: Build rootfs only
+      - name: Download FFmpeg source
         run: |
-          cd openwrt
-          make -j$(nproc) target/compile V=w
+          FFMPEG_TARBALL="ffmpeg-${FFMPEG_VERSION}.tar.xz"
+          wget -q --show-progress "https://ffmpeg.org/releases/${FFMPEG_TARBALL}"
+          tar -xJf "${FFMPEG_TARBALL}"
+          mv "ffmpeg-${FFMPEG_VERSION}" ffmpeg-src
 
-      - name: Extract ext4 image
+      - name: Build static OpenSSL for HTTPS support (optional)
+        if: env.ENABLE_HTTPS == 'true'
         run: |
-          cd openwrt/bin/targets/armvirt/64
-          gzip -d *.root.ext4.gz
-          mv *.root.ext4 ../../../../istoreos-droid-fast.ext4
+          OPENSSL_VERSION="3.2.1"
+          wget -q --show-progress "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
+          tar -xzf "openssl-${OPENSSL_VERSION}.tar.gz"
+          mv "openssl-${OPENSSL_VERSION}" openssl-src
 
-      - name: Adapt image for Droidspaces
+          export PATH="${CROSS_BIN_DIR}:$PATH"
+          cd openssl-src
+
+          ./Configure \
+            linux-aarch64 \
+            --cross-compile-prefix="${CROSS_PREFIX}" \
+            --prefix="${GITHUB_WORKSPACE}/openssl-install" \
+            --openssldir="${GITHUB_WORKSPACE}/openssl-install" \
+            no-shared \
+            no-tests \
+            no-unit-test \
+            -static
+
+          make -j$(nproc)
+          make install_sw
+
+          echo "OPENSSL_PREFIX=${GITHUB_WORKSPACE}/openssl-install" >> $GITHUB_ENV
+          echo "OPENSSL_CFLAGS=-I${GITHUB_WORKSPACE}/openssl-install/include" >> $GITHUB_ENV
+          echo "OPENSSL_LIBS=-L${GITHUB_WORKSPACE}/openssl-install/lib -lssl -lcrypto" >> $GITHUB_ENV
+
+      - name: Configure FFmpeg
         run: |
-          chmod +x ./post_adapt.sh
-          sudo bash ./post_adapt.sh istoreos-droid-fast.ext4
+          cd ffmpeg-src
+
+          CONFIG_FLAGS=(
+            --target-os=linux
+            --arch=aarch64
+            --cpu=cortex-a53
+            --cc="${CC}"
+            --cross-prefix="${CROSS_PREFIX}"
+            --sysroot="${TARGET_DIR}"
+            --extra-cflags="-I${TARGET_DIR}/usr/include"
+            --extra-ldflags="-L${TARGET_DIR}/usr/lib -static"
+            --enable-cross-compile
+            --prefix="${GITHUB_WORKSPACE}/ffmpeg-install"
+            --disable-ffplay
+            --disable-ffprobe
+            --disable-doc
+            --disable-debug
+            --enable-small
+            --disable-shared
+            --enable-static
+            --disable-asm
+            --enable-gpl
+            --enable-version3
+            --enable-nonfree
+            --enable-network
+            --enable-protocol=http,file,tcp,udp
+            --enable-demuxer=hls,mpegts,mpegvideo,flv,mov,mp4,m4v,matroska
+            --enable-muxer=mpegts,mp4,mov,matroska
+            --enable-decoder=h264,hevc,aac,mp3,mp2
+            --enable-parser=h264,hevc,aac,mpegaudio
+            --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc
+          )
+
+          if [ "${ENABLE_HTTPS}" = "true" ]; then
+            CONFIG_FLAGS+=(
+              --enable-openssl
+              --extra-cflags="-I${TARGET_DIR}/usr/include ${OPENSSL_CFLAGS}"
+              --extra-ldflags="-L${TARGET_DIR}/usr/lib -static ${OPENSSL_LIBS}"
+              --enable-protocol=https,tls
+            )
+          else
+            CONFIG_FLAGS+=(--disable-openssl)
+          fi
+
+          echo "FFmpeg configure flags:"
+          printf '%s\n' "${CONFIG_FLAGS[@]}"
+
+          ./configure "${CONFIG_FLAGS[@]}"
+
+      - name: Patch FFmpeg config for musl compatibility
+        run: |
+          cd ffmpeg-src
+          # FFmpeg's configure often fails to detect these math functions when cross-compiling
+          # against musl. Force HAVE_* to 1 to avoid "static declaration follows non-static
+          # declaration" errors in libavutil/libm.h.
+          CONFIG_H="config.h"
+          [ -f "ffbuild/config.h" ] && CONFIG_H="ffbuild/config.h"
+          echo "Patching ${CONFIG_H}"
+
+          # Math functions provided by musl that FFmpeg may fail to detect
+          for func in \
+            ATAN2F ATANF CBRT CBRTF COPYSIGN COSF ERF ERFC EXP2 EXP2F EXPF \
+            FMAXF FMINF HYPOT ISFINITE ISINF ISNAN LGAMMA LLROUND LLROUNDF \
+            LOG2 LOG2F LOGB LRINT LRINTF LROUND LROUNDF NANF NEARBYINT POWF \
+            RINT RINTF ROUND ROUNDF SINF SQRTF TANF TRUNC TRUNCF; do
+            sed -i "s/#define HAVE_${func} 0/#define HAVE_${func} 1/g" "${CONFIG_H}"
+          done
+
+          # Standard libc functions available on Linux/musl
+          for func in GETENV SETENV UNSETENV LOCALTIME_R GMTIME_R STRPTIME STRTOK_R; do
+            sed -i "s/#define HAVE_${func} 0/#define HAVE_${func} 1/g" "${CONFIG_H}"
+          done
+
+          # Network functions provided by musl
+          for func in INET_ATON INET_PTON POLL GETADDRINFO GETNAMEINFO; do
+            sed -i "s/#define HAVE_${func} 0/#define HAVE_${func} 1/g" "${CONFIG_H}"
+          done
+
+          # Remove the dangerous getenv macro that breaks system headers
+          sed -i '/^#define getenv(x) NULL$/d' "${CONFIG_H}"
+
+          echo "Patched HAVE_* macros (sample):"
+          grep -E 'HAVE_(CBRT|RINT|GETENV|LOCALTIME_R|INET_ATON)' "${CONFIG_H}" || true
+
+      - name: Compile FFmpeg
+        run: |
+          cd ffmpeg-src
+          export PATH="${CROSS_BIN_DIR}:$PATH"
+          make -j$(nproc)
+          make install
+
+      - name: Strip and inspect binary
+        run: |
+          file "${GITHUB_WORKSPACE}/ffmpeg-install/bin/ffmpeg"
+          ls -lh "${GITHUB_WORKSPACE}/ffmpeg-install/bin/ffmpeg"
+          "${STRIP}" "${GITHUB_WORKSPACE}/ffmpeg-install/bin/ffmpeg"
+          ls -lh "${GITHUB_WORKSPACE}/ffmpeg-install/bin/ffmpeg"
+
+      - name: Create deployment tarball
+        run: |
+          OUTPUT_NAME="ffmpeg-${FFMPEG_VERSION}-openwrt-aarch64_cortex-a53-${OPENWRT_RELEASE}"
+          mkdir -p "${OUTPUT_NAME}"
+          cp "${GITHUB_WORKSPACE}/ffmpeg-install/bin/ffmpeg" "${OUTPUT_NAME}/ffmpeg"
+          printf '%s\n' \
+            "FFmpeg ${FFMPEG_VERSION} for OpenWrt aarch64_cortex-a53" \
+            "=========================================================" \
+            "Target: ${OPENWRT_TARGET}" \
+            "OpenWrt release: ${OPENWRT_RELEASE}" \
+            "Cross prefix: ${CROSS_PREFIX}" \
+            "HTTPS support: ${ENABLE_HTTPS}" \
+            "" \
+            "Install:" \
+            "  scp ${OUTPUT_NAME}/ffmpeg root@openwrt:/usr/bin/ffmpeg" \
+            "  chmod +x /usr/bin/ffmpeg" \
+            "" \
+            "Verify:" \
+            "  ffmpeg -version" > "${OUTPUT_NAME}/README.txt"
+          tar czf "${OUTPUT_NAME}.tar.gz" "${OUTPUT_NAME}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: iStoreOS-arm64-ext4
-          path: istoreos-droid-fast.ext4
-          retention-days: 30
+          name: ffmpeg-openwrt-aarch64_cortex-a53
+          path: ffmpeg-*.tar.gz
+          if-no-files-found: error
+
+      - name: Upload to release
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && format('ffmpeg-openwrt-aarch64-build-{0}', github.run_number) || github.ref_name }}
+          name: ${{ github.event_name == 'workflow_dispatch' && format('FFmpeg OpenWrt aarch64 build {0}', github.run_number) || github.ref_name }}
+          files: ffmpeg-*.tar.gz
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
