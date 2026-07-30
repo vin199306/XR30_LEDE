@@ -1,0 +1,55 @@
+# Consider using UCI or creating files in /etc/nginx/conf.d/ for configuration.
+# Parsing UCI configuration is skipped if uci set nginx.global.uci_enable=false
+# For details see: https://openwrt.org/docs/guide-user/services/webserver/nginx
+# UCI_CONF_VERSION=1.2
+
+worker_processes 2;
+
+user root;
+
+include module.d/*.module;
+
+events {
+	worker_connections 1024;
+}
+
+http {
+	access_log off;
+	server_names_hash_bucket_size 128;
+	server_tokens build;
+	keepalive_timeout 300s;
+	log_format openwrt
+		'$request_method $scheme://$host$request_uri => $status'
+		' (${body_bytes_sent}B in ${request_time}s) <- $http_referer';
+
+	include mime.types;
+	default_type application/octet-stream;
+
+	# UTF-8 编码,避免中文文件名乱码
+	charset utf-8;
+	charset_types text/css text/plain text/xml application/json application/javascript;
+
+	# 零拷贝传输 + 延迟发送,减少用户态内存拷贝
+	sendfile on;
+	tcp_nopush on;
+	tcp_nodelay on;
+
+	# 文件元数据缓存,减少 stat 系统调用 (对 autoindex 场景显著优化)
+	open_file_cache max=1000 inactive=5m;
+	open_file_cache_valid 60s;
+	open_file_cache_min_uses 2;
+	open_file_cache_errors on;
+
+	client_max_body_size 0;
+	client_body_buffer_size 128K;
+	large_client_header_buffers 4 32k;
+
+	gzip on;
+	gzip_vary on;
+	gzip_proxied any;
+
+	root /www;
+
+	#UCI_HTTP_CONFIG
+	include conf.d/*.conf;
+}
