@@ -29,6 +29,11 @@ popd
 mv -f qiu-luci-app-daed/daed qiu-luci-app-daed/luci-app-daed package/porxy/
 rm -rf qiu-luci-app-daed
 
+# Fix empty web embed directory for daed build
+mkdir -p package/porxy/daed/webrender/web
+[ -f package/porxy/daed/webrender/web/index.html ] || \
+    echo "<!-- placeholder -->" > package/porxy/daed/webrender/web/index.html
+
 rm -rf feeds/luci/applications/{luci-app-dockerman,luci-app-samba4,luci-app-aria2,luci-app-diskman}
 rm -rf feeds/packages/net/{samba4,v2ray-geodata,mosdns,sing-box,aria2,ariang,adguardhome}
 
