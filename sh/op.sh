@@ -204,21 +204,4 @@ git clone https://github.com/sbwml/packages_lang_golang -b 26.x feeds/packages/l
 sed -i 's|/bin/login|/bin/login -f root|g' feeds/packages/utils/ttyd/files/ttyd.config
 
 
-sudo rm -rf package/base-files/files/etc/banner
-
 sed -i "s/%D %V %C/%D %V $(TZ=UTC-8 date +%Y.%m.%d)/" package/base-files/files/etc/openwrt_release
-
-sed -i "s/%R/by $OP_author/" package/base-files/files/etc/openwrt_release
-
-date=$(date +"%Y-%m-%d")
-
-
-echo "                                                    " >> package/base-files/files/etc/banner
-echo "  _______                     ________        __" >> package/base-files/files/etc/banner
-echo " |       |.-----.-----.-----.|  |  |  |.----.|  |_" >> package/base-files/files/etc/banner
-echo " |   -   ||  _  |  -__|     ||  |  |  ||   _||   _|" >> package/base-files/files/etc/banner
-echo " |_______||   __|_____|__|__||________||__|  |____|" >> package/base-files/files/etc/banner
-echo "          |__|" >> package/base-files/files/etc/banner
-echo " -----------------------------------------------------" >> package/base-files/files/etc/banner
-echo "         %D ${date} by $OP_author                     " >> package/base-files/files/etc/banner
-echo " -----------------------------------------------------" >> package/base-files/files/etc/banner
