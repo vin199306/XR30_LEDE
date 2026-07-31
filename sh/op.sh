@@ -150,6 +150,26 @@ wait
 ./scripts/feeds update -a
 ./scripts/feeds install -a
 
+# Fix warp module build failure: -Werror on unused-variable and empty-body
+# warp_dbg() macro expands to empty when debug disabled, causing empty-body warnings
+# in 'if (cond) warp_dbg(...);' -> 'if (cond);' (empty statement)
+WARP_DIR=$(find package -type d -name "warp" -path "*/drivers/*" 2>/dev/null | head -1)
+if [ -n "$WARP_DIR" ]; then
+	# Method 1: PKG_EXTRA_CFLAGS (OpenWrt standard, passed to EXTRA_CFLAGS via kernel.mk)
+	if [ -f "$WARP_DIR/Makefile" ] && ! grep -q "Wno-error" "$WARP_DIR/Makefile"; then
+		echo 'PKG_EXTRA_CFLAGS += -Wno-error=unused-variable -Wno-error=empty-body' >> "$WARP_DIR/Makefile"
+	fi
+	# Method 2: ccflags-y in Kbuild files (direct, double insurance)
+	find "$WARP_DIR" -type f \( -name "Kbuild" -o -name "Makefile" \) | while read f; do
+		if grep -q "^obj-" "$f" && ! grep -q "Wno-error" "$f"; then
+			printf '\nccflags-y += -Wno-error=unused-variable -Wno-error=empty-body\n' >> "$f"
+		fi
+	done
+	echo "Patched warp module at $WARP_DIR: disabled -Werror for unused-variable and empty-body"
+else
+	echo "WARNING: warp package directory not found, skip patching"
+fi
+
 sed -i 's|/bin/login|/bin/login -f root|g' feeds/packages/utils/ttyd/files/ttyd.config
 
 
