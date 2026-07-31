@@ -78,7 +78,7 @@ jobs:
         sudo ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
         sudo dpkg-reconfigure -f noninteractive tzdata
         sudo apt-get update
-        sudo apt-get install -y tar build-essential flex bison cmake g++ gawk gcc-multilib g++-multilib gettext git libfuse-dev libncurses5-dev libssl-dev python3 python3-pip python3-ply python3-distutils python3-pyelftools rsync unzip zlib1g-dev file wget patch autoconf automake curl binutils bzip2 lib32gcc-s1 libc6-dev-i386 uglifyjs libreadline-dev libglib2.0-dev libelf-dev libtool autopoint antlr3 gperf ccache swig coreutils scons libpython3-dev rename clang llvm
+        sudo apt-get install -y tar build-essential flex bison cmake g++ gawk gcc-multilib g++-multilib gettext git libfuse-dev libncurses5-dev libssl-dev python3 python3-pip python3-ply python3-distutils python3-pyelftools rsync unzip zlib1g-dev file wget patch autoconf automake curl binutils bzip2 lib32gcc-s1 libc6-dev-i386 uglifyjs libreadline-dev libglib2.0-dev libelf-dev libtool autopoint antlr3 gperf ccache swig coreutils scons libpython3-dev rename
         sudo apt-get clean
         git config --global user.name 'GitHub Actions' && git config --global user.email 'noreply@github.com'
         sudo mkdir -p /workdir
@@ -164,7 +164,7 @@ jobs:
       run: |
         set -x
         cd $SOURCE_NAME
-        [ -d ./staging_dir ] && find ./staging_dir/ -name '*' -exec touch {} \; >/dev/null 2>&1 || true
+        [ -d ./staging_dir ] && find ./staging_dir/ -type f -print0 | xargs -0 -r touch >/dev/null 2>&1 || true
         ./scripts/feeds update -a
         cd .. 
         [ -e patch ] && cp -rf patch/diy/*.patch $SOURCE_NAME
@@ -213,7 +213,7 @@ jobs:
         cd $SOURCE_NAME
         make defconfig
         for i in 1 2 3; do
-          make download -j$(nproc) && break
+          make download -j16 && break
           echo "::warning::make download failed, retrying ($i/3)..."
           sleep 30
         done
