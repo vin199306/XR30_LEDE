@@ -15,6 +15,17 @@ name: OpenWrt Builder
 on:
   repository_dispatch:
   workflow_dispatch:
+    inputs:
+      firmware_type:
+        description: '固件类型'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - sysupgrade
+          - factory
+          - initramfs
 
 env:
   REPO_URL: https://github.com/chasey-dev/immortalwrt-mt798x-rebase
@@ -118,10 +129,23 @@ jobs:
       if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
         cd openwrt/bin/targets/*/*
-        # rm -rf packages
         mkdir -p firmware
-        # cp *.bin *.img.gz *.itb *.fip firmware/ 2>/dev/null || true
-        cp * firmware/ 2>/dev/null || true
+        FW_TYPE="${{ inputs.firmware_type || 'all' }}"
+        echo "固件类型: $FW_TYPE"
+        case "$FW_TYPE" in
+          sysupgrade)
+            cp *sysupgrade*.bin firmware/ 2>/dev/null || true
+            ;;
+          factory)
+            cp *factory*.bin firmware/ 2>/dev/null || true
+            ;;
+          initramfs)
+            cp *initramfs*.bin firmware/ 2>/dev/null || true
+            ;;
+          all)
+            cp *.bin firmware/ 2>/dev/null || true
+            ;;
+        esac
         cp sha256sums firmware/ 2>/dev/null || true
         echo "FIRMWARE=$PWD/firmware" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
