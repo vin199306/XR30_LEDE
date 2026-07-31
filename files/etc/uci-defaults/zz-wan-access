@@ -1,0 +1,51 @@
+#!/bin/sh
+
+# 放开 WAN 口管理访问 (避免重置后失联)
+# SSH (22), HTTP (80), HTTPS (443)
+
+uci -q delete firewall.allow_wan_ssh
+uci set firewall.allow_wan_ssh='rule'
+uci set firewall.allow_wan_ssh.name='Allow-WAN-SSH'
+uci set firewall.allow_wan_ssh.src='wan'
+uci set firewall.allow_wan_ssh.dest_port='22'
+uci set firewall.allow_wan_ssh.proto='tcp'
+uci set firewall.allow_wan_ssh.target='ACCEPT'
+
+uci -q delete firewall.allow_wan_http
+uci set firewall.allow_wan_http='rule'
+uci set firewall.allow_wan_http.name='Allow-WAN-HTTP'
+uci set firewall.allow_wan_http.src='wan'
+uci set firewall.allow_wan_http.dest_port='80'
+uci set firewall.allow_wan_http.proto='tcp'
+uci set firewall.allow_wan_http.target='ACCEPT'
+
+uci -q delete firewall.allow_wan_https
+uci set firewall.allow_wan_https='rule'
+uci set firewall.allow_wan_https.name='Allow-WAN-HTTPS'
+uci set firewall.allow_wan_https.src='wan'
+uci set firewall.allow_wan_https.dest_port='443'
+uci set firewall.allow_wan_https.proto='tcp'
+uci set firewall.allow_wan_https.target='ACCEPT'
+
+# 允许 ICMP echo (ping) 用于远程诊断,同时支持 IPv4/IPv6
+uci -q delete firewall.allow_wan_ping
+uci set firewall.allow_wan_ping='rule'
+uci set firewall.allow_wan_ping.name='Allow-WAN-Ping'
+uci set firewall.allow_wan_ping.src='wan'
+uci set firewall.allow_wan_ping.proto='icmp'
+uci set firewall.allow_wan_ping.icmp_type='echo-request'
+uci set firewall.allow_wan_ping.family='ipv4'
+uci set firewall.allow_wan_ping.target='ACCEPT'
+
+uci -q delete firewall.allow_wan_ping6
+uci set firewall.allow_wan_ping6='rule'
+uci set firewall.allow_wan_ping6.name='Allow-WAN-Ping6'
+uci set firewall.allow_wan_ping6.src='wan'
+uci set firewall.allow_wan_ping6.proto='icmp'
+uci set firewall.allow_wan_ping6.icmp_type='echo-request'
+uci set firewall.allow_wan_ping6.family='ipv6'
+uci set firewall.allow_wan_ping6.target='ACCEPT'
+
+uci commit firewall
+
+exit 0
