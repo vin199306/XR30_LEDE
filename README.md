@@ -1,20 +1,21 @@
-# RAX3000M OpenWrt  闭源驱动固件
+# XR30 NAND OpenWrt 闭源驱动固件
 
-## 📋 支持的设备，编译未测试
-- ✅ **RAX3000M EMMC 版**
-- ✅ **RAX3000M NAND **
-- ✅ **RAX3000M 256M NAND**
-- ✅ **XR30 EMMC 版**
+## 📋 支持设备
 - ✅ **XR30 NAND 版**
-- ✅ **JCG Q30 PRO**
 
 ## ⚡ 核心特性
-- **自建源支持**
-- **集成nginx**
+- **基于 OpenWrt 25.12：6.12 内核**
+- **闭源 MTK 驱动：wed / hnat 硬件加速**
+- **集成 nginx + LuCI**
 - **中继增强**
-- **最新25.12**：6.12内核
-- **闭源驱动支持**：**wed hnat MTK 硬件加速**
-- **包含DAED**
+- **自建源支持**
+
+## 📦 默认插件
+- luci-app-socat
+- luci-app-samba4
+- luci-theme-m3e
+- luci-app-ttyd
+- luci-app-diskman
 
 
 
