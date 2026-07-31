@@ -78,7 +78,7 @@ jobs:
         sudo ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
         sudo dpkg-reconfigure -f noninteractive tzdata
         sudo apt-get update
-        sudo apt-get install -y tar build-essential flex bison cmake g++ gawk gcc-multilib g++-multilib gettext git libfuse-dev libncurses5-dev libssl-dev python3 python3-pip python3-ply python3-distutils python3-pyelftools rsync unzip zlib1g-dev file wget patch autoconf automake curl binutils bzip2 lib32gcc-s1 libc6-dev-i386 uglifyjs libreadline-dev libglib2.0-dev libelf-dev libtool autopoint antlr3 gperf ccache swig coreutils scons libpython3-dev rename
+        sudo apt-get install -y build-essential flex bison cmake g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3 python3-ply python3-distutils python3-pyelftools rsync unzip zlib1g-dev file wget patch autoconf automake curl binutils bzip2 lib32gcc-s1 libc6-dev-i386 libreadline-dev libglib2.0-dev libelf-dev libtool autopoint gperf ccache swig coreutils
         sudo apt-get clean
         git config --global user.name 'GitHub Actions' && git config --global user.email 'noreply@github.com'
         sudo mkdir -p /workdir
@@ -107,7 +107,7 @@ jobs:
         echo "REPO_BRANCH=openwrt-25.12" >> $GITHUB_ENV
         echo "CCACHE_DIR=/workdir/.ccache" >> $GITHUB_ENV
         echo "CCACHE_COMPRESS=1" >> $GITHUB_ENV
-        echo "CCACHE_MAXSIZE=2G" >> $GITHUB_ENV
+        echo "CCACHE_MAXSIZE=5G" >> $GITHUB_ENV
 
     - name: 克隆源代码
       working-directory: /workdir
@@ -216,7 +216,7 @@ jobs:
         for i in 1 2 3; do
           make download -j16 && break
           echo "::warning::make download failed, retrying ($i/3)..."
-          sleep 30
+          sleep 10
         done
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;

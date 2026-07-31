@@ -6,9 +6,6 @@ set -x
 sed -ie 's/^\(.\).*vermagic$/\1cp $(TOPDIR)\/.vermagic $(LINUX_DIR)\/.vermagic/' include/kernel-defaults.mk
 grep HASH target/linux/generic/kernel-6.12 | awk -F'HASH-' '{print $2}' | awk '{print $1}' | md5sum | awk '{print $1}' > .vermagic
 
-git clone -b packages --depth 1 --single-branch https://github.com/shiyu1314/openwrt-feeds package/xd
-git clone -b porxy --depth 1 --single-branch https://github.com/shiyu1314/openwrt-feeds package/porxy
-
 rm -rf feeds/luci/applications/{luci-app-dockerman,luci-app-samba4,luci-app-aria2,luci-app-diskman}
 rm -rf feeds/packages/net/{samba4,v2ray-geodata,mosdns,sing-box,aria2,ariang,adguardhome}
 
@@ -94,26 +91,26 @@ sed -ri "s/(PKG_VERSION:=)[^\"]*/\1$RUST_VERSION/;s/(PKG_HASH:=)[^\"]*/\1$RUST_H
 
 # fstools
 rm -rf package/system/fstools
-git clone https://github.com/sbwml/package_system_fstools -b openwrt-25.12 package/system/fstools
 # util-linux
 rm -rf package/utils/util-linux
-git clone https://github.com/sbwml/package_utils_util-linux -b openwrt-25.12 package/utils/util-linux
-
 # nghttp3
 rm -rf feeds/packages/libs/nghttp3
-git clone https://github.com/sbwml/package_libs_nghttp3 package/libs/nghttp3
-
 # ngtcp2
 rm -rf feeds/packages/libs/ngtcp2
-git clone https://github.com/sbwml/package_libs_ngtcp2 package/libs/ngtcp2
-
 # curl - fix passwall `time_pretransfer` check
 rm -rf feeds/packages/net/curl
-git clone https://github.com/sbwml/feeds_packages_net_curl feeds/packages/net/curl
-
 # nginx - latest version
 rm -rf feeds/packages/net/nginx
-git clone https://github.com/sbwml/feeds_packages_net_nginx feeds/packages/net/nginx -b openwrt-25.12
+
+# 并行 clone 所有依赖仓库, 减少等待时间
+git clone --depth=1 https://github.com/sbwml/package_system_fstools -b openwrt-25.12 package/system/fstools &
+git clone --depth=1 https://github.com/sbwml/package_utils_util-linux -b openwrt-25.12 package/utils/util-linux &
+git clone --depth=1 https://github.com/sbwml/package_libs_nghttp3 package/libs/nghttp3 &
+git clone --depth=1 https://github.com/sbwml/package_libs_ngtcp2 package/libs/ngtcp2 &
+git clone --depth=1 https://github.com/sbwml/feeds_packages_net_curl feeds/packages/net/curl &
+git clone --depth=1 https://github.com/sbwml/feeds_packages_net_nginx feeds/packages/net/nginx -b openwrt-25.12 &
+wait
+
 sed -i 's/procd_set_param stdout 1/procd_set_param stdout 0/g;s/procd_set_param stderr 1/procd_set_param stderr 0/g' feeds/packages/net/nginx/files/nginx.init
 
 # nginx - ubus
@@ -144,7 +141,12 @@ sed -i '/<br \/>/d' feeds/luci/modules/luci-compat/luasrc/view/cbi/full_valuefoo
 
 #golang 26.x
 rm -rf feeds/packages/lang/golang
-git clone https://github.com/sbwml/packages_lang_golang -b 26.x feeds/packages/lang/golang
+git clone --depth=1 https://github.com/sbwml/packages_lang_golang -b 26.x feeds/packages/lang/golang &
+
+# 并行 clone 开头的 feeds 仓库
+git clone --depth=1 -b packages --single-branch https://github.com/shiyu1314/openwrt-feeds package/xd &
+git clone --depth=1 -b porxy --single-branch https://github.com/shiyu1314/openwrt-feeds package/porxy &
+wait
 
 ./scripts/feeds update -a
 ./scripts/feeds install -a
