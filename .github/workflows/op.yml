@@ -106,6 +106,9 @@ jobs:
         echo "REPO_URL=https://github.com/shiyu1314/openwrt-source" >> $GITHUB_ENV
         echo "REPO_BRANCH=openwrt-25.12" >> $GITHUB_ENV
         echo "CCACHE_DIR=/workdir/.ccache" >> $GITHUB_ENV
+        echo "CCACHE_COMPRESS=1" >> $GITHUB_ENV
+        echo "CCACHE_MAXSIZE=2G" >> $GITHUB_ENV
+        echo "FORCE_UNSAFE_CONFIGURE=1" >> $GITHUB_ENV
 
     - name: 克隆源代码
       working-directory: /workdir
@@ -191,7 +194,11 @@ jobs:
       run: |
         cd $SOURCE_NAME
         make defconfig
-        make download -j8
+        for i in 1 2 3; do
+          make download -j8 && break
+          echo "::warning::make download failed, retrying ($i/3)..."
+          sleep 30
+        done
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
