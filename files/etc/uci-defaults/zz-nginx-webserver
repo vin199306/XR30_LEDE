@@ -1,0 +1,11 @@
+#!/bin/sh
+
+# 禁用 uhttpd, 使用 nginx 作为 Web 服务器
+/etc/init.d/uhttpd disable 2>/dev/null
+/etc/init.d/uhttpd stop 2>/dev/null
+
+# 启用并启动 nginx
+/etc/init.d/nginx enable 2>/dev/null
+/etc/init.d/nginx start 2>/dev/null
+
+exit 0
