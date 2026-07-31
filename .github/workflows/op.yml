@@ -250,14 +250,12 @@ jobs:
       id: organize
       run: |
         cd $SOURCE_NAME/bin/targets/*/*
-        rm -rf packages
-        rm -rf *.buildinfo
-        rm -rf profiles.json
-        rm -rf *.manifest
-        rm -rf *bl2.bin
-        rm -rf *kernel.bin
-        rm -rf *.sha
-        rm -rf sha256sums
+        mkdir -p /tmp/firmware
+        cp -f *sysupgrade.bin /tmp/firmware/ 2>/dev/null || true
+        rm -rf ./*
+        cp -f /tmp/firmware/*sysupgrade.bin .
+        rm -rf /tmp/firmware
+        ls -lh
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
 
     - name: 上传固件到Releases
