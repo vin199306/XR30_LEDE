@@ -226,7 +226,9 @@ jobs:
       run: |
         cd $SOURCE_NAME
         echo -e "$(nproc) thread compile"
-        make -j$(nproc) || yes n | make -j1 || yes n | make -j1 V=s
+        # V=w: 输出 warning/error + 进入目录日志, 便于观察编译进度
+        # 失败时降级到单线程 V=s 输出完整日志便于排查
+        make -j$(nproc) V=w || yes n | make -j1 V=w || yes n | make -j1 V=s
 
     - name: Save build cache
       if: success()
