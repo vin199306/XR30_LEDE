@@ -91,23 +91,17 @@ jobs:
       working-directory: /workdir
       run: |
         df -hT $PWD
-        git clone $REPO_URL $SOURCE_NAME
-        ln -sf /workdir/$SOURCE_NAME $GITHUB_WORKSPACE/$SOURCE_NAME
-        
-    - name: 切换分支
-      run: |
-        cd $SOURCE_NAME
         case $REPO_BRANCH in
           openwrt-25.12)
-            _release_tag=$(git tag --sort=taggerdate --list 'v25.*' | tail -1)
-            git checkout $_release_tag
-            _prerelease=false
+            _release_tag=$(git ls-remote --tags $REPO_URL 'v25.*' | grep -v '\^{}' | awk -F/ '{print $NF}' | sort -V | tail -1)
             ;;
           *)
             echo "Can't get local/upstream's branch/tags"
             ;;
         esac
-        echo "release_tag=$_release_tag" >> $GITHUB_ENV  
+        git clone --depth=1 --branch=$_release_tag $REPO_URL $SOURCE_NAME
+        ln -sf /workdir/$SOURCE_NAME $GITHUB_WORKSPACE/$SOURCE_NAME
+        echo "release_tag=$_release_tag" >> $GITHUB_ENV
         
     - name: 取回缓存 staging_dir
       id: build-cache
@@ -121,10 +115,9 @@ jobs:
           ${{ matrix.source }}/build_dir/toolchain-*
           ${{ matrix.source }}/bin/packages
           ${{ matrix.source }}/bin/targets
-        key: ${{ matrix.source }}-${{ matrix.device }}-build-cache-${{ github.run_id }}
+        key: ${{ matrix.source }}-${{ matrix.device }}-build-cache-${{ env.release_tag }}
         restore-keys: |
           ${{ matrix.source }}-${{ matrix.device }}-build-cache-
-          ${{ matrix.source }}-xr30-nand-build-cache-
 
     - name: Validate toolchain cache
       run: |
@@ -188,7 +181,7 @@ jobs:
         make -j$(nproc) || yes n | make -j1 || yes n | make -j1 V=s
 
     - name: Save build cache
-      if: always()
+      if: success()
       uses: actions/cache/save@v5
       with:
         path: |
@@ -199,7 +192,7 @@ jobs:
           ${{ matrix.source }}/build_dir/toolchain-*
           ${{ matrix.source }}/bin/packages
           ${{ matrix.source }}/bin/targets
-        key: ${{ matrix.source }}-${{ matrix.device }}-build-cache-${{ github.run_id }}
+        key: ${{ matrix.source }}-${{ matrix.device }}-build-cache-${{ env.release_tag }}
 
     - name: 查看磁盘使用情况
       if: (!cancelled())
