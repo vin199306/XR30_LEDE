@@ -33,6 +33,7 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
+      actions: write
 
     steps:
     - name: Checkout
@@ -153,9 +154,9 @@ jobs:
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@v2
       env:
-        GITHUB_TOKEN: ${{ secrets.ACTIONS_TRIGGER_PAT }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        token: ${{ secrets.ACTIONS_TRIGGER_PAT }}
+        token: ${{ secrets.GITHUB_TOKEN }}
         retain_days: 0
         keep_minimum_runs: 2
 
@@ -163,9 +164,9 @@ jobs:
       uses: actions/github-script@v9
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       env:
-        GITHUB_TOKEN: ${{ secrets.ACTIONS_TRIGGER_PAT }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        github-token: ${{ secrets.ACTIONS_TRIGGER_PAT }}
+        github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
           const keepLatest = 3;
           const deleteTags = true;
