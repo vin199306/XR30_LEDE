@@ -108,7 +108,6 @@ jobs:
         echo "CCACHE_DIR=/workdir/.ccache" >> $GITHUB_ENV
         echo "CCACHE_COMPRESS=1" >> $GITHUB_ENV
         echo "CCACHE_MAXSIZE=2G" >> $GITHUB_ENV
-        echo "FORCE_UNSAFE_CONFIGURE=1" >> $GITHUB_ENV
 
     - name: 克隆源代码
       working-directory: /workdir
@@ -151,6 +150,16 @@ jobs:
           rm -rf staging_dir/toolchain-* build_dir/toolchain-* build_dir/target-*/toolchain
           rm -f staging_dir/target-*/pkginfo/toolchain.* staging_dir/target-*/stamp/.toolchain_installed
         fi
+    - name: Restore feeds cache
+      uses: actions/cache/restore@v5
+      with:
+        path: |
+          ${{ matrix.source }}/feeds
+          ${{ matrix.source }}/package/feeds
+        key: ${{ matrix.source }}-${{ matrix.device }}-feeds-${{ env.release_tag }}
+        restore-keys: |
+          ${{ matrix.source }}-${{ matrix.device }}-feeds-
+
     - name: patch修补
       run: |
         set -x
@@ -169,6 +178,15 @@ jobs:
         cd ..
         [ -e patch ] && cp -rf patch/nginx/luci.locations $SOURCE_NAME/feeds/packages/net/nginx/files-luci-support
         [ -e patch ] && cp -rf patch/nginx/uci.conf.template $SOURCE_NAME/feeds/packages/net/nginx-util/files
+
+    - name: Save feeds cache
+      if: success()
+      uses: actions/cache/save@v5
+      with:
+        path: |
+          ${{ matrix.source }}/feeds
+          ${{ matrix.source }}/package/feeds
+        key: ${{ matrix.source }}-${{ matrix.device }}-feeds-${{ env.release_tag }}
 
     - name: 加载自定义配置
       run: |
@@ -195,7 +213,7 @@ jobs:
         cd $SOURCE_NAME
         make defconfig
         for i in 1 2 3; do
-          make download -j8 && break
+          make download -j$(nproc) && break
           echo "::warning::make download failed, retrying ($i/3)..."
           sleep 30
         done
