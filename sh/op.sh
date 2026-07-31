@@ -153,20 +153,18 @@ wait
 # Fix warp module build failure: -Werror on unused-variable and empty-body
 # warp_dbg() macro expands to empty when debug disabled, causing empty-body warnings
 # in 'if (cond) warp_dbg(...);' -> 'if (cond);' (empty statement)
-# 源码从 tarball 解压到 build_dir, 必须用 Build/Prepare hook 在解压后修改
+# 注意: 不能覆盖 Build/Prepare, 否则会跳过 Build/Quilt 导致补丁未应用
+# 用 Build/Configure hook (内核包通常无 Configure 步骤, 覆盖安全)
 WARP_PKG=$(find package -type d -name "warp" -path "*/drivers/*" 2>/dev/null | head -1)
 if [ -n "$WARP_PKG" ] && [ -f "$WARP_PKG/Makefile" ]; then
-	# 追加 Build/Prepare override: 源码解压后 sed 修复警告
-	# 1. u32 i, total = 0; -> u32 i;  (移除未使用变量)
-	# 2. 直接给 .c 文件加 -Wno-error 编译标志 (通过 ccflags-y 注入)
-	# 用 Build/Prepare 而非 Build/Compile, 确保在 quilt 之后、编译之前生效
 	if ! grep -q "warp-werror-fix" "$WARP_PKG/Makefile"; then
 		cat >> "$WARP_PKG/Makefile" <<'EOF'
 
 # warp-werror-fix: disable -Werror for unused-variable and empty-body
-# warp_dbg() macro expands to empty, causing 'if (cond);' empty-body warning
-define Build/Prepare
-	$(call Build/Prepare/Default)
+# 用 Build/Configure (而非 Build/Prepare) 注入 ccflags-y
+# Build/Prepare 负责解压源码 + 应用 patches (Build/Quilt), 不能覆盖
+# Build/Configure 在 Prepare 之后、Compile 之前执行, 适合注入编译参数
+define Build/Configure
 	@echo ">>> Applying warp -Werror fix <<<"
 	find $(PKG_BUILD_DIR) \( -name 'Kbuild' -o -name 'Makefile' \) -exec grep -l '^obj-' {} \; | while read f; do \
 		grep -q 'Wno-error' "$$f" || echo 'ccflags-y += -Wno-error=unused-variable -Wno-error=empty-body' >> "$$f"; \
@@ -174,7 +172,7 @@ define Build/Prepare
 endef
 EOF
 	fi
-	echo "Patched warp Makefile with Build/Prepare hook at $WARP_PKG"
+	echo "Patched warp Makefile with Build/Configure hook at $WARP_PKG"
 else
 	echo "WARNING: warp package directory not found"
 fi
