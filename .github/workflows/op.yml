@@ -225,10 +225,13 @@ jobs:
       id: compile
       run: |
         cd $SOURCE_NAME
-        echo -e "$(nproc) thread compile"
+        # GitHub Actions 2核 runner, 用 j4 提高并行度 (会内存紧张但能加速)
+        JOBS=$(nproc)
+        [ "$JOBS" -le 2 ] && JOBS=4
+        echo -e "$JOBS thread compile"
         # V=w: 输出 warning/error + 进入目录日志, 便于观察编译进度
         # 失败时降级到单线程 V=s 输出完整日志便于排查
-        make -j$(nproc) V=w || yes n | make -j1 V=w || yes n | make -j1 V=s
+        make -j$JOBS V=w || yes n | make -j1 V=w || yes n | make -j1 V=s
 
     - name: Save build cache
       if: success()
