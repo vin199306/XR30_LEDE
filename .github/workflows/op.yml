@@ -137,7 +137,6 @@ jobs:
           ${{ matrix.source }}/build_dir/hostpkg
           ${{ matrix.source }}/build_dir/toolchain-*
           ${{ matrix.source }}/bin/packages
-          ${{ matrix.source }}/bin/targets
         key: ${{ matrix.source }}-${{ matrix.device }}-build-cache-${{ env.release_tag }}
         restore-keys: |
           ${{ matrix.source }}-${{ matrix.device }}-build-cache-
@@ -211,7 +210,9 @@ jobs:
       id: package
       run: |
         cd $SOURCE_NAME
+        rm -rf bin/targets
         make defconfig
+        grep -E 'CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_' .config || true
         for i in 1 2 3; do
           make download -j16 && break
           echo "::warning::make download failed, retrying ($i/3)..."
@@ -239,7 +240,6 @@ jobs:
           ${{ matrix.source }}/build_dir/hostpkg
           ${{ matrix.source }}/build_dir/toolchain-*
           ${{ matrix.source }}/bin/packages
-          ${{ matrix.source }}/bin/targets
         key: ${{ matrix.source }}-${{ matrix.device }}-build-cache-${{ env.release_tag }}
 
     - name: 查看磁盘使用情况
