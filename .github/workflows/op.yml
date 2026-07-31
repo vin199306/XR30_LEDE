@@ -60,6 +60,16 @@ jobs:
         rm -rf ~/{.cargo,.dotnet,.rustup}
         df -Th
 
+    - name: Restore apt cache
+      uses: actions/cache/restore@v5
+      with:
+        path: |
+          /var/cache/apt/archives
+          /var/lib/apt/lists
+        key: apt-cache-ubuntu-22.04
+        restore-keys: |
+          apt-cache-
+
     - name: 编译环境
       env:
         DEBIAN_FRONTEND: noninteractive
@@ -68,12 +78,21 @@ jobs:
         sudo ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
         sudo dpkg-reconfigure -f noninteractive tzdata
         sudo apt-get update
-        sudo apt-get install -y tar build-essential flex bison cmake g++ gawk gcc-multilib g++-multilib gettext git libfuse-dev libncurses5-dev libssl-dev python3 python3-pip python3-ply python3-distutils python3-pyelftools rsync unzip zlib1g-dev file wget subversion patch upx-ucl autoconf automake curl asciidoc binutils bzip2 lib32gcc-s1 libc6-dev-i386 uglifyjs msmtp texinfo libreadline-dev libglib2.0-dev xmlto libelf-dev libtool autopoint antlr3 gperf ccache swig coreutils haveged scons libpython3-dev rename qemu-utils clang llvm
+        sudo apt-get install -y tar build-essential flex bison cmake g++ gawk gcc-multilib g++-multilib gettext git libfuse-dev libncurses5-dev libssl-dev python3 python3-pip python3-ply python3-distutils python3-pyelftools rsync unzip zlib1g-dev file wget patch autoconf automake curl binutils bzip2 lib32gcc-s1 libc6-dev-i386 uglifyjs libreadline-dev libglib2.0-dev libelf-dev libtool autopoint antlr3 gperf ccache swig coreutils scons libpython3-dev rename clang llvm
         sudo apt-get clean
         git config --global user.name 'GitHub Actions' && git config --global user.email 'noreply@github.com'
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
         df -Th
+
+    - name: Save apt cache
+      if: success()
+      uses: actions/cache/save@v5
+      with:
+        path: |
+          /var/cache/apt/archives
+          /var/lib/apt/lists
+        key: apt-cache-ubuntu-22.04
 
     - name: 设置环境变量
       run: |
@@ -86,6 +105,7 @@ jobs:
         echo "SOURCE_NAME=${{ matrix.source }}" >> $GITHUB_ENV
         echo "REPO_URL=https://github.com/shiyu1314/openwrt-source" >> $GITHUB_ENV
         echo "REPO_BRANCH=openwrt-25.12" >> $GITHUB_ENV
+        echo "CCACHE_DIR=/workdir/.ccache" >> $GITHUB_ENV
 
     - name: 克隆源代码
       working-directory: /workdir
@@ -108,6 +128,7 @@ jobs:
       uses: actions/cache/restore@v5
       with:
         path: |
+          /workdir/.ccache
           ${{ matrix.source }}/dl
           ${{ matrix.source }}/staging_dir
           ${{ matrix.source }}/build_dir/host
@@ -152,6 +173,7 @@ jobs:
         cat <<EOF >>$SOURCE_NAME/.config
         CONFIG_TARGET_mediatek=y
         CONFIG_TARGET_mediatek_filogic=y
+        CONFIG_CCACHE=y
         ${{ matrix.config }}
         EOF
         
@@ -185,6 +207,7 @@ jobs:
       uses: actions/cache/save@v5
       with:
         path: |
+          /workdir/.ccache
           ${{ matrix.source }}/dl
           ${{ matrix.source }}/staging_dir
           ${{ matrix.source }}/build_dir/host
