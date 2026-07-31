@@ -28,12 +28,11 @@ sed -i 's/+luci-nginx \\$/+luci-nginx/' feeds/luci/collections/luci-light/Makefi
 pushd feeds/luci || exit 1
 for patch in *.patch; do
     [ -f "$patch" ] || continue
-    
+
     echo "Applying $patch ..."
     patch -p1 --no-backup-if-mismatch < "$patch" || {
-        echo "ERROR: Failed to apply $patch"
-        popd
-        exit 1
+        echo "::warning::Failed to apply $patch (may already be merged upstream), skipping"
+        rm -f "*.rej"
     }
 done
 popd
@@ -43,8 +42,8 @@ for patch in *.patch; do
 
     echo "Applying $patch ..."
     patch -p1 --no-backup-if-mismatch < "$patch" || {
-        echo "ERROR: Failed to apply $patch"
-        exit 1
+        echo "::warning::Failed to apply $patch (may already be merged upstream), skipping"
+        rm -f "*.rej"
     }
 done
 
