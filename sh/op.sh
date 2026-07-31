@@ -68,6 +68,25 @@ cat > files/etc/modules.d/usb-storage <<'EOF'
 usb-storage quirks=30de:6544:u
 EOF
 
+# 只编译 sysupgrade.bin, 跳过 initramfs/kernel/rootfs 等产物, 加快编译速度
+# 1. 给 cmcc_xr30-nand 添加 IMAGES := sysupgrade.bin
+# 2. 移除 KERNEL_INITRAMFS 定义 (避免编译 initramfs 镜像)
+filogic_mk="target/linux/mediatek/image/filogic.mk"
+awk '
+  /^define Device\/cmcc_xr30-nand$/ { in_dev=1 }
+  in_dev && /^  IMAGES :=/ { has_images=1 }
+  in_dev && /^  IMAGE\/sysupgrade\.bin :=/ && !has_images {
+    print "  IMAGES := sysupgrade.bin"
+    has_images=1
+  }
+  in_dev && /^  KERNEL_INITRAMFS / { skip=1; next }
+  skip && /\\$/ { next }
+  skip { skip=0; next }
+  { print }
+  /^endef$/ && in_dev { in_dev=0 }
+' "$filogic_mk" > "$filogic_mk.tmp" && mv "$filogic_mk.tmp" "$filogic_mk"
+echo "Patched filogic.mk: cmcc_xr30-nand IMAGES := sysupgrade.bin only"
+
 # rust
 RUST_VERSION=1.95.0
 RUST_HASH=62b67230754da642a264ca0cb9fc08820c54e2ed7b3baba0289876d4cdb48c08
