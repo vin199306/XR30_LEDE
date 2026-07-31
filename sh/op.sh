@@ -153,21 +153,30 @@ wait
 # Fix warp module build failure: -Werror on unused-variable and empty-body
 # warp_dbg() macro expands to empty when debug disabled, causing empty-body warnings
 # in 'if (cond) warp_dbg(...);' -> 'if (cond);' (empty statement)
-WARP_DIR=$(find package -type d -name "warp" -path "*/drivers/*" 2>/dev/null | head -1)
-if [ -n "$WARP_DIR" ]; then
-	# Method 1: PKG_EXTRA_CFLAGS (OpenWrt standard, passed to EXTRA_CFLAGS via kernel.mk)
-	if [ -f "$WARP_DIR/Makefile" ] && ! grep -q "Wno-error" "$WARP_DIR/Makefile"; then
-		echo 'PKG_EXTRA_CFLAGS += -Wno-error=unused-variable -Wno-error=empty-body' >> "$WARP_DIR/Makefile"
-	fi
-	# Method 2: ccflags-y in Kbuild files (direct, double insurance)
-	find "$WARP_DIR" -type f \( -name "Kbuild" -o -name "Makefile" \) | while read f; do
-		if grep -q "^obj-" "$f" && ! grep -q "Wno-error" "$f"; then
-			printf '\nccflags-y += -Wno-error=unused-variable -Wno-error=empty-body\n' >> "$f"
-		fi
+# 源码从 tarball 解压到 build_dir, 必须用 Build/Prepare hook 在解压后修改
+WARP_PKG=$(find package -type d -name "warp" -path "*/drivers/*" 2>/dev/null | head -1)
+if [ -n "$WARP_PKG" ] && [ -f "$WARP_PKG/Makefile" ]; then
+	# 追加 Build/Prepare override: 源码解压后 sed 修复警告
+	# 1. u32 i, total = 0; -> u32 i;  (移除未使用变量)
+	# 2. 直接给 .c 文件加 -Wno-error 编译标志 (通过 ccflags-y 注入)
+	# 用 Build/Prepare 而非 Build/Compile, 确保在 quilt 之后、编译之前生效
+	if ! grep -q "warp-werror-fix" "$WARP_PKG/Makefile"; then
+		cat >> "$WARP_PKG/Makefile" <<'EOF'
+
+# warp-werror-fix: disable -Werror for unused-variable and empty-body
+# warp_dbg() macro expands to empty, causing 'if (cond);' empty-body warning
+define Build/Prepare
+	$(call Build/Prepare/Default)
+	@echo ">>> Applying warp -Werror fix <<<"
+	find $(PKG_BUILD_DIR) \( -name 'Kbuild' -o -name 'Makefile' \) -exec grep -l '^obj-' {} \; | while read f; do \
+		grep -q 'Wno-error' "$$f" || echo 'ccflags-y += -Wno-error=unused-variable -Wno-error=empty-body' >> "$$f"; \
 	done
-	echo "Patched warp module at $WARP_DIR: disabled -Werror for unused-variable and empty-body"
+endef
+EOF
+	fi
+	echo "Patched warp Makefile with Build/Prepare hook at $WARP_PKG"
 else
-	echo "WARNING: warp package directory not found, skip patching"
+	echo "WARNING: warp package directory not found"
 fi
 
 sed -i 's|/bin/login|/bin/login -f root|g' feeds/packages/utils/ttyd/files/ttyd.config
