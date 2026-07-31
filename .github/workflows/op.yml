@@ -134,11 +134,6 @@ jobs:
           rm -rf staging_dir/toolchain-* build_dir/toolchain-* build_dir/target-*/toolchain
           rm -f staging_dir/target-*/pkginfo/toolchain.* staging_dir/target-*/stamp/.toolchain_installed
         fi
-        if [ -d dl/go-mod-cache ]; then
-          echo "::warning::Dropping restored Go module cache; it can be left incomplete by failed Go builds."
-          rm -rf dl/go-mod-cache
-        fi
-            
     - name: patch修补
       run: |
         set -x
@@ -191,12 +186,6 @@ jobs:
         cd $SOURCE_NAME
         echo -e "$(nproc) thread compile"
         make -j$(nproc) || yes n | make -j1 || yes n | make -j1 V=s
-
-    - name: Clean volatile Go module cache
-      if: always()
-      run: |
-        cd $SOURCE_NAME
-        rm -rf dl/go-mod-cache
 
     - name: Save build cache
       if: always()
