@@ -1,11 +1,4 @@
-CONFIG_TARGET_DEVICE_PACKAGES_mediatek_filogic_DEVICE_cmcc_xr30-emmc=""
-CONFIG_TARGET_DEVICE_PACKAGES_mediatek_filogic_DEVICE_jcg_q30-pro=""
 CONFIG_TARGET_DEVICE_PACKAGES_mediatek_filogic_DEVICE_cmcc_xr30-nand=""
-CONFIG_TARGET_DEVICE_PACKAGES_mediatek_filogic_DEVICE_cmcc_rax3000m=""
-CONFIG_TARGET_DEVICE_PACKAGES_mediatek_filogic_DEVICE_cmcc_rax3000me=""
-CONFIG_TARGET_DEVICE_PACKAGES_mediatek_filogic_DEVICE_cmcc_rax3000m-emmc=""
-CONFIG_TARGET_DEVICE_PACKAGES_mediatek_filogic_DEVICE_cmcc_rax3000m-nand=""
-CONFIG_TARGET_DEVICE_PACKAGES_mediatek_filogic_DEVICE_cmcc_rax3000m-256m-nand=""
 CONFIG_TARGET_MULTI_PROFILE=y
 CONFIG_TARGET_OPTIMIZATION="-O2 -pipe -mcpu=cortex-a53+crc+crypto"
 CONFIG_DEVEL=y
