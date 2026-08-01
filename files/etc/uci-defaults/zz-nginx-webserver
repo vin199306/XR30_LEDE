@@ -4,8 +4,13 @@
 /etc/init.d/uhttpd disable 2>/dev/null
 /etc/init.d/uhttpd stop 2>/dev/null
 
+# 移除 restrict_locally IP 白名单限制 (允许 WAN 口访问 LuCI)
+# restrict_locally 默认 deny all, 仅允许内网网段, 会导致 WAN IPv6 返回 403
+uci -q del_list nginx._lan.include='restrict_locally'
+uci commit nginx
+
 # 启用并启动 nginx
 /etc/init.d/nginx enable 2>/dev/null
-/etc/init.d/nginx start 2>/dev/null
+/etc/init.d/nginx restart 2>/dev/null
 
 exit 0
