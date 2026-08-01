@@ -1,0 +1,28 @@
+#!/bin/sh
+
+# 确保 SSH (dropbear) 默认启用并监听所有接口
+# 避免刷完固件后 Luci 无法访问时仍可通过 SSH 排障
+
+# 启用 dropbear 服务
+uci -q set dropbear.@dropbear[0].enable='1'
+
+# 监听所有接口 (不绑定特定 Interface,移除 deprecated 的 Interface 选项)
+uci -q delete dropbear.@dropbear[0].Interface
+
+# 监听 22 端口
+uci -q set dropbear.@dropbear[0].Port='22'
+
+# 允许 root 登录
+uci -q set dropbear.@dropbear[0].RootPasswordAuth='on'
+uci -q set dropbear.@dropbear[0].RootLogin='1'
+
+# 允许密码认证
+uci -q set dropbear.@dropbear[0].PasswordAuth='on'
+
+uci commit dropbear
+
+# 确保 dropbear 开机自启 (移除可能的禁用标记)
+rm -f /etc/rc.d/*dropbear 2>/dev/null
+/etc/init.d/dropbear enable 2>/dev/null
+
+exit 0
