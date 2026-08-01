@@ -9,6 +9,11 @@
 uci -q del_list nginx._lan.include='restrict_locally'
 uci commit nginx
 
+# 创建 nginx.conf 符号链接指向 uci.conf (init 脚本每次启动时生成)
+# 缺失此链接会导致 nginx -t 报 "open() nginx.conf failed"
+mkdir -p /var/lib/nginx
+ln -sf /var/lib/nginx/uci.conf /etc/nginx/nginx.conf
+
 # 启用并启动 nginx
 /etc/init.d/nginx enable 2>/dev/null
 /etc/init.d/nginx restart 2>/dev/null
