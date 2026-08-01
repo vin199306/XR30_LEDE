@@ -26,6 +26,16 @@ on:
           - sysupgrade
           - factory
           - initramfs
+      ssh_user:
+        description: 'SSH 登录用户名 (默认 root)'
+        required: false
+        default: 'root'
+        type: string
+      ssh_password:
+        description: 'SSH 登录密码 (默认 password)'
+        required: false
+        default: 'password'
+        type: string
 
 env:
   REPO_URL: https://github.com/chasey-dev/immortalwrt-mt798x-rebase
@@ -86,12 +96,15 @@ jobs:
       run: cd openwrt && ./scripts/feeds install -a
 
     - name: Load custom configuration
+      env:
+        SSH_USER: ${{ inputs.ssh_user || 'root' }}
+        SSH_PASSWORD: ${{ inputs.ssh_password || 'password' }}
       run: |
         [ -e files ] && mv files openwrt/files
         [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
         chmod +x $DIY_P2_SH
         cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P2_SH
+        SSH_USER="$SSH_USER" SSH_PASSWORD="$SSH_PASSWORD" $GITHUB_WORKSPACE/$DIY_P2_SH
 
     - name: Download package
       id: package
