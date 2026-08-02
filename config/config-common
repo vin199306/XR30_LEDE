@@ -1,4 +1,4 @@
-CONFIG_TARGET_DEVICE_PACKAGES_mediatek_filogic_DEVICE_cmcc_xr30-nand=""
+CONFIG_TARGET_DEVICE_PACKAGES_mediatek_filogic_DEVICE_cmcc_xr30-nand="kmod-usb3 kmod-usb-storage-uas automount fdisk"
 CONFIG_TARGET_OPTIMIZATION="-O2 -pipe -mcpu=cortex-a53+crc+crypto"
 CONFIG_DEVEL=y
 CONFIG_TOOLCHAINOPTS=y
